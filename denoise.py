@@ -12,8 +12,8 @@ from __future__ import annotations
 
 import impossible_mass_denoise as _imd
 
-__all__ = ["denoise_spectrum", "is_possible", "fingerprint", "table_status", "clear_cache",
-           "cache_size"]
+__all__ = ["denoise_spectrum", "is_possible", "fingerprint", "table_status",
+           "halogen_table_status", "clear_cache", "cache_size"]
 
 _MODES = ("neg", "pos")
 
@@ -26,25 +26,31 @@ def _check_mode(mode):
         raise ValueError(f"mode must be one of {_MODES}, got {mode!r}")
 
 
-def is_possible(mz: float, mode: str = "neg") -> bool:
-    """True when some CHNOPS composition could produce this ion m/z in this polarity.
+def is_possible(mz: float, mode: str = "neg", halogens: bool = False) -> bool:
+    """True when some composition in the alphabet could produce this ion m/z in this polarity.
 
-    mode is "neg" or "pos". False means no chemically legal composition exists within tolerance,
-    which is the definition of an impossible mass: the peak cannot be a real fragment ion.
+    mode is "neg" or "pos". The alphabet is C/H/N/O/P/S, plus Cl/F/Br/I when halogens=True.
+    False means no chemically legal composition exists within tolerance - impossible under THAT
+    alphabet, singly charged, monoisotopic. It does not prove the peak is not a real ion.
     """
     _check_mode(mode)
-    return bool(_imd.possible(float(mz), mode=mode, d_max=0, union=True)[0])
+    return bool(_imd.possible(float(mz), mode=mode, d_max=0, union=True,
+                              use_halogens=bool(halogens))[0])
 
 
-def denoise_spectrum(peaks, mode: str = "neg"):
+def denoise_spectrum(peaks, mode: str = "neg", halogens: bool = False):
     """Return the peaks that survive the filter, in the order given.
+
+    halogens=False (the default) is the validated configuration. halogens=True keeps fragments
+    that need Cl/F/Br/I to explain them - bromide and chloride ions, for example - at the cost of
+    rejecting fewer noise peaks overall; see the README before switching it on.
 
     peaks is any iterable of (mz, intensity) pairs; the return is a list of the same pairs.
     Intensity is passed through untouched - this filter removes peaks, it never rescales them.
     An empty result is possible and legitimate: every peak in that spectrum was impossible.
     """
     _check_mode(mode)
-    return [p for p in peaks if is_possible(p[0], mode)]
+    return [p for p in peaks if is_possible(p[0], mode, halogens)]
 
 
 def fingerprint() -> str:
@@ -54,8 +60,13 @@ def fingerprint() -> str:
 
 
 def table_status() -> str:
-    """Whether the precomputed mass table loaded, and what it covers."""
+    """Whether the precomputed CHNOPS table loaded, and what it covers."""
     return _imd.table_status()
+
+
+def halogen_table_status() -> str:
+    """Whether the precomputed halogen-aware table loaded, and what it covers."""
+    return _imd.halogen_table_status()
 
 
 def cache_size() -> int:

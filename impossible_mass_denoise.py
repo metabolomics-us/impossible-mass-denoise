@@ -1,30 +1,27 @@
 #!/usr/bin/env python
 """
-Formula-FREE "impossible mass" denoising (Meija 2006, Anal Bioanal Chem 385:486-499,
-"Mathematical tools in analytical mass spectrometry", section 2.1 Diophantine equations).
+Formula-free "impossible mass" denoising for MS/MS fragment spectra.
 
-For each fragment peak of exact m/z, ask the Diophantine (subset-sum / "coin") question:
-does ANY non-negative integer element composition sum to this mass within tolerance,
-subject to valence (degree-of-unsaturation >= 0)?  If NO composition exists, the mass is
-CHEMICALLY IMPOSSIBLE -> it cannot be a real fragment ion -> noise.
+Method: J. Meija, "Mathematical tools in analytical mass spectrometry", Anal Bioanal Chem 385
+(2006) 486-499, section 2.1 (Diophantine equations).
 
-  sum_i n_i * m_i = M   (n_i integer >= 0)        [Meija Eq. 1]
-  DBE = C - (H+D+F+Cl)/2 + (N+P)/2 + 1  >= -0.5   [valence / Euler, Meija 2.2]
+For each fragment peak of exact m/z, ask the Diophantine (subset-sum / "coin") question: does ANY
+non-negative integer element composition sum to this mass within tolerance, subject to valence?
+If no composition exists, the mass is impossible under the configured element alphabet and the
+peak is flagged as noise.
 
-Why this and not the alternatives:
-  * Fanzhou/Kong GRASS (electronic) denoising is ALREADY DEPLOYED in BinBase -> redundant.
-  * Kong CHEMICAL denoising needs the PRECURSOR molecular formula (subformula-of-precursor)
-    -> inapplicable to unannotated / orphan bins.
-  * Meija impossible-mass is FORMULA-FREE: it only needs the peak m/z + an element alphabet,
-    so it denoises ANY spectrum, including the unannotated orphan pile. The discriminating
-    signal is the MASS DEFECT: organic CHNOPS ions occupy narrow mass-defect bands; a peak
-    with an impossible defect (e.g. a detector artifact at 125.87 next to a 126.05 precursor)
-    has NO composition and is flagged.
+  sum_i n_i * m_i = M   (n_i integer >= 0)                 [Meija Eq. 1]
+  DBE = C - (H+D+F+Cl+Br+I)/2 + (N+P)/2 + 1  >= -0.5       [valence, Meija 2.2]
 
-Small-scale demo: the 4 HILIC labeled ISTDs (D added to alphabet since they are d-labeled;
-cross-checked vs the formula-based v1 labels) + a sample of normal (CHNOPS) confirmed bins.
+It needs only the peak m/z and an element alphabet - no precursor formula, adduct or candidate
+structure - so it applies to unannotated spectra, where subformula-of-precursor denoising (which
+requires the precursor formula) cannot run. The discriminating signal is the mass defect: organic
+ions occupy narrow mass-defect bands, and a peak outside every band has no composition.
 
-Run:  .venv_fdr/bin/python code/analysis/impossible_mass_denoise.py
+A composition must also be chemically legal: SENIOR valence rules, Seven-Golden-Rules element
+ratios, per-element caps, and a union of an ion-tolerant and a neutral-strict validity model.
+Precomputed lookup tables (CHNOPS, and CHNOPS + halogens) answer the deployed configuration at
+microsecond speed; any other configuration falls back to the solver.
 """
 import os
 import json
@@ -34,7 +31,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 # (research-tree demo paths removed from the packaged copy)
-V1_PEAKS = ROOT / "data" / "results/denoise" / "istd_noise_labels_v1_peaks.csv"
 
 # monoisotopic masses
 MASS = dict(C=12.0, H=1.0078250319, D=2.0141017779, N=14.0030740052, O=15.9949146221,
@@ -159,8 +155,8 @@ _CACHE = {}
 # functions -- a stale or foreign table can never silently outvote the solver. Any other
 # call (deuterated, halogens, alkali, single-model, sub-2-mDa tolerance, m/z above the table)
 # falls through to the Diophantine search unchanged.
-# Packaged copy: the table ships beside this file. The repo path is kept as a fallback so
-# this module behaves identically when run from the research tree.
+# Packaged copy: the tables ship beside this file. The research-tree paths are the fallback,
+# so this module behaves identically when run from the research repository.
 _HERE = Path(__file__).resolve().parent
 TABLE_PATH = (_HERE / "possible_mass_table.npz" if (_HERE / "possible_mass_table.npz").exists()
               else ROOT / "data" / "results/denoise" / "possible_mass_table.npz")
@@ -171,6 +167,17 @@ _TABLE = None
 _TABLE_TRIED = False
 _TABLE_STATUS = "not loaded"
 _TCACHE = {}
+
+# Halogen-aware twin (2026-09-23): same chemistry, same fingerprint, Cl/F/Br/I in the alphabet.
+# Built by build_possible_mass_table_halogen.py. Kept as a separate file and separate globals so
+# the deployed CHNOPS path cannot be affected by its presence or absence.
+HALOGEN_TABLE_PATH = (_HERE / "possible_mass_table_halogen.npz"
+                      if (_HERE / "possible_mass_table_halogen.npz").exists()
+                      else ROOT / "data" / "results/denoise" / "possible_mass_table_halogen.npz")
+HALOGEN_TABLE_CONFIG = dict(d_max=0, use_halogens=True, alkali=False, union=True)
+_HTABLE = None
+_HTABLE_TRIED = False
+_HTABLE_STATUS = "not loaded"
 
 
 def chemistry_fingerprint():
@@ -183,51 +190,68 @@ def chemistry_fingerprint():
     return hashlib.sha256(src.encode()).hexdigest()[:16]
 
 
-def load_table(path=None):
-    """Load the precomputed table, or return None and record why in table_status()."""
-    global _TABLE, _TABLE_TRIED, _TABLE_STATUS
-    if path is None and _TABLE_TRIED:
-        return _TABLE
-    _TABLE_TRIED = True
-    _TABLE = None
-    src = Path(path) if path else TABLE_PATH
+def _read_table(src, config, builder):
+    """Shared loader body. Returns (table dict or None, human-readable status)."""
     try:
         import numpy as np
     except ImportError:
-        _TABLE_STATUS = "unusable: numpy not importable"
-        return None
+        return None, "unusable: numpy not importable"
     if not src.exists():
-        _TABLE_STATUS = f"unusable: {src} missing (run build_possible_mass_table.py)"
-        return None
+        return None, f"unusable: {src} missing (run {builder})"
     z = np.load(src, allow_pickle=False)
     have = set(z.files)
     need = {"bins_neg", "bins_pos", "off_lo_neg", "off_hi_neg", "off_lo_pos", "off_hi_pos",
             "bin_da", "max_mz", "fingerprint", "config"}
     if not need <= have:
-        _TABLE_STATUS = f"unusable: {src.name} predates the fingerprint/config header -> rebuild"
-        return None
+        return None, f"unusable: {src.name} predates the fingerprint/config header -> rebuild"
     fp_file, fp_code = str(z["fingerprint"]), chemistry_fingerprint()
     if fp_file != fp_code:
-        _TABLE_STATUS = (f"unusable: chemistry fingerprint {fp_file} != {fp_code} "
-                         "(validity rules changed) -> rebuild")
-        return None
+        return None, (f"unusable: chemistry fingerprint {fp_file} != {fp_code} "
+                      "(validity rules changed) -> rebuild")
     cfg = json.loads(str(z["config"]))
-    if cfg != TABLE_CONFIG:
-        _TABLE_STATUS = f"unusable: table config {cfg} != {TABLE_CONFIG}"
-        return None
-    _TABLE = dict(neg=z["bins_neg"], pos=z["bins_pos"],
-                  lo_neg=z["off_lo_neg"], hi_neg=z["off_hi_neg"],
-                  lo_pos=z["off_lo_pos"], hi_pos=z["off_hi_pos"],
-                  bin=float(z["bin_da"]), max_mz=float(z["max_mz"]))
-    _TABLE_STATUS = (f"loaded {src.name}: {_TABLE['bin']*1000:.0f} mDa grid to "
-                     f"{_TABLE['max_mz']:.0f} Da, fingerprint {fp_file}")
+    if cfg != config:
+        return None, f"unusable: table config {cfg} != {config}"
+    t = dict(neg=z["bins_neg"], pos=z["bins_pos"],
+             lo_neg=z["off_lo_neg"], hi_neg=z["off_hi_neg"],
+             lo_pos=z["off_lo_pos"], hi_pos=z["off_hi_pos"],
+             bin=float(z["bin_da"]), max_mz=float(z["max_mz"]))
+    return t, (f"loaded {src.name}: {t['bin']*1000:.0f} mDa grid to "
+               f"{t['max_mz']:.0f} Da, fingerprint {fp_file}")
+
+
+def load_table(path=None):
+    """Load the precomputed CHNOPS table, or return None and record why in table_status()."""
+    global _TABLE, _TABLE_TRIED, _TABLE_STATUS
+    if path is None and _TABLE_TRIED:
+        return _TABLE
+    _TABLE_TRIED = True
+    src = Path(path) if path else TABLE_PATH
+    _TABLE, _TABLE_STATUS = _read_table(src, TABLE_CONFIG, "build_possible_mass_table.py")
     return _TABLE
+
+
+def load_halogen_table(path=None):
+    """Load the halogen-aware table, or return None and record why in halogen_table_status()."""
+    global _HTABLE, _HTABLE_TRIED, _HTABLE_STATUS
+    if path is None and _HTABLE_TRIED:
+        return _HTABLE
+    _HTABLE_TRIED = True
+    src = Path(path) if path else HALOGEN_TABLE_PATH
+    _HTABLE, _HTABLE_STATUS = _read_table(src, HALOGEN_TABLE_CONFIG,
+                                          "build_possible_mass_table_halogen.py")
+    return _HTABLE
 
 
 def table_status():
     """Human-readable state of the lookup table (loads it on first call)."""
     load_table()
     return _TABLE_STATUS
+
+
+def halogen_table_status():
+    """Human-readable state of the halogen-aware table (loads it on first call)."""
+    load_halogen_table()
+    return _HTABLE_STATUS
 
 
 def _table_lookup(mz, tol, mode, d_max, use_halogens, alkali, union):
@@ -239,11 +263,11 @@ def _table_lookup(mz, tol, mode, d_max, use_halogens, alkali, union):
     1 mDa wide and the query window is 2*tol >= 4 mDa, so a window overlapping a bin's
     [lowest, highest] span must contain one of those two endpoints -- checking the two
     extremes of every set bin in the window decides the question exactly."""
-    if not USE_TABLE or not union or d_max or use_halogens or alkali:
+    if not USE_TABLE or not union or d_max or alkali:
         return None
     if mode not in ("neg", "pos") or tol < TABLE_MIN_TOL:
         return None
-    t = load_table()
+    t = load_halogen_table() if use_halogens else load_table()
     if t is None:
         return None
     if not 0 < mz <= t["max_mz"] - tol:
@@ -269,15 +293,11 @@ def possible(mz, tol=0.005, mode="neg", d_max=0, use_halogens=False, strict=Fals
 
     Three validity models (a candidate composition matching the ion mass must also be
     chemically legal):
-      union=True (DEFAULT, deployed 2026-07-29): a peak is possible if EITHER the lenient
-        ion-tolerant check OR the strict ±H-neutralized valid-neutral check accepts it -> flagged
-        impossible only when BOTH reject it (no chemical explanation either way). Maximally
-        conservative flagging: best specificity (NIST23 FP by intensity, re-measured 2026-09-16
-        against this code: pos 1.03% / neg 0.08%; the pos 0.42% / neg 0.12% quoted here before was
-        a 2026-07-29 run of an older test script and did not describe the deployed model) AND it
-        fixes both FP classes the single models miss -- saturated quaternary-amine cations
-        (lenient-only FP, HILIC strip 7.8%->0.0%) and acylium/radical fragments (strict-only FP).
-        Still Pareto-beats lenient and strict on both modes and both measures.
+      union=True (DEFAULT): a peak is possible if EITHER the lenient ion-tolerant check OR the
+        strict +/-H-neutralized valid-neutral check accepts it, so it is flagged impossible only
+        when BOTH reject it (no chemical explanation either way). This is the most conservative
+        flagging, and it fixes the false-flag classes each single model has: saturated
+        quaternary-amine cations (lenient-only) and acylium/radical fragments (strict-only).
       union=False, strict=False: lenient single model (DBE>=-0.5 slack, SENIOR pair, on the ion).
         Over-flags saturated N-cations (choline/TMAO/carnitine base peaks).
       union=False, strict=True: neutralize the ion (undo +/-H), require a valid even-electron
@@ -297,12 +317,15 @@ def possible(mz, tol=0.005, mode="neg", d_max=0, use_halogens=False, strict=Fals
     # single-model or wider-alphabet call returns the UNION/CHNOPS answer for that mass and
     # silently overrides the requested model (found 2026-09-16: reordering the NIST23 bench to
     # score union first made lenient and strict report union's numbers verbatim).
+    # Each alphabet has its own table now (CHNOPS, and CHNOPS+halogens since 2026-09-23), so
+    # use_halogens no longer disqualifies a call - but it MUST be in the fast-path key, or a
+    # halogen-aware answer would be served to a CHNOPS call for the same mass (and vice versa):
+    # exactly the cross-config leak described above.
     _table_eligible = (union
                        and d_max == TABLE_CONFIG["d_max"]
-                       and use_halogens == TABLE_CONFIG["use_halogens"]
                        and alkali == TABLE_CONFIG["alkali"])
     if not need_formula and _table_eligible:
-        tkey = (round(mz, 5), tol, mode)
+        tkey = (round(mz, 5), tol, mode, bool(use_halogens))
         hit = _TCACHE.get(tkey)
         if hit is not None:
             return hit
@@ -458,45 +481,3 @@ def _fmt(c, h, d, n, o, p, s, cl, f, br=0, i=0, na=0, k=0):
     parts = [("C", c), ("H", h), ("D", d), ("N", n), ("O", o), ("P", p),
              ("S", s), ("Cl", cl), ("F", f), ("Br", br), ("I", i), ("Na", na), ("K", k)]
     return "".join(f"{e}{cnt}" if cnt > 1 else e for e, cnt in parts if cnt > 0)
-
-
-# labeled ISTDs (D count in-name -> add to alphabet since they are d-labeled)
-ISTD_D = {"D3-2-Hydroxyglutaric": 3, "D4-Niacin": 4,
-          "glutamic acid-d5": 5, "D4-Taurochenodeoxycholic": 4}
-# a few normal (non-labeled) metabolite bins for the CHNOPS demo
-NORMAL_DEMO = ["arginine", "glucaric acid", "glutathione", "lactobionic acid"]
-
-
-def load_bins():
-    rows = list(csv.DictReader(open(BINS)))
-    out = []
-    for r in rows:
-        name = (r.get("name") or "")
-        peaks = []
-        for tok in (r.get("msms") or "").split():
-            if ":" in tok:
-                mz, inten = tok.split(":")
-                peaks.append((float(mz), float(inten)))
-        out.append((name, r.get("precursor_mz"), peaks))
-    return out
-
-
-def load_v1():
-    if not V1_PEAKS.exists():
-        return {}
-    d = {}
-    for r in csv.DictReader(open(V1_PEAKS)):
-        d[(r["name"], round(float(r["mz"]), 4))] = r["label"]
-    return d
-
-
-def run_spectrum(name, peaks, d_max, tol):
-    tot = sum(i for _, i in peaks) or 1.0
-    rows = []
-    for mz, inten in peaks:
-        ok, form = possible(mz, tol=tol, mode="neg", d_max=d_max, need_formula=True)
-        rows.append(dict(name=name, mz=mz, intensity=inten,
-                         rel=round(inten / tot, 5),
-                         verdict="possible" if ok else "IMPOSSIBLE",
-                         formula=form or ""))
-    return rows

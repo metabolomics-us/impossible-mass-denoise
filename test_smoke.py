@@ -7,9 +7,9 @@ import sys
 import time
 
 from denoise import (denoise_spectrum, is_possible, fingerprint, table_status,
-                     cache_size, clear_cache)
+                     halogen_table_status, cache_size, clear_cache)
 
-EXPECTED_FINGERPRINT = "5aae4ec26694da4d"
+EXPECTED_FINGERPRINT = "5aae4ec26694da4d"   # same chemistry for both tables
 fails = []
 
 
@@ -23,6 +23,7 @@ print(table_status())
 check("chemistry fingerprint", fingerprint() == EXPECTED_FINGERPRINT,
       f"{fingerprint()} (expected {EXPECTED_FINGERPRINT})")
 check("precomputed table loaded", "loaded" in table_status())
+check("halogen table loaded", "loaded" in halogen_table_status())
 
 # real fragments must survive
 for mz, mode in [(59.0138, "neg"), (96.9696, "neg"), (145.0506, "neg"),
@@ -40,6 +41,17 @@ spec = [(59.0138, 100.0), (80.1000, 12.0), (96.9696, 45.0)]
 kept = denoise_spectrum(spec, "neg")
 check("removes only the impossible peak", kept == [(59.0138, 100.0), (96.9696, 45.0)],
       f"kept {kept}")
+
+# halogens are opt-in. Bromide is the base peak of many brominated compounds in negative mode;
+# the default CHNOPS alphabet cannot explain it, the halogen alphabet can.
+BR = 78.9189
+check("default (CHNOPS) removes bromide", not is_possible(BR, "neg"))
+check("halogens=True keeps bromide", is_possible(BR, "neg", halogens=True))
+# ...and the two answers must not leak into each other through the memo cache
+check("CHNOPS answer unchanged after a halogen call", not is_possible(BR, "neg"))
+# known limitation, pinned so a change is noticed: the heavy isotope 81Br- is not in the alphabet
+check("81Br- isotope still removed with halogens (monoisotopic alphabet)",
+      not is_possible(80.9169, "neg", halogens=True))
 
 # a mistyped polarity must raise, not silently score the other mode
 for bad in ("negative", "NEG", "positive", ""):
@@ -69,6 +81,11 @@ t0 = time.perf_counter()
 denoise_spectrum(uniq, "neg")                 # same masses: all cache hits
 warm = (time.perf_counter() - t0) / len(uniq) * 1e6
 check("cold lookup under 30 us per peak", cold < 30, f"{cold:.1f} us/peak")
+clear_cache()
+t0 = time.perf_counter()
+denoise_spectrum(uniq, "neg", halogens=True)
+cold_h = (time.perf_counter() - t0) / len(uniq) * 1e6
+check("halogen cold lookup under 30 us per peak", cold_h < 30, f"{cold_h:.1f} us/peak")
 check("warm lookup faster than cold", warm < cold, f"{warm:.1f} us/peak warm")
 
 print(f"\n{len(fails)} failure(s)" if fails else "\nall checks passed")

@@ -3,9 +3,10 @@
 A noise filter for MS/MS fragment spectra. For each fragment m/z it asks whether **any** CHNOPS
 composition could produce that exact mass at that polarity, and removes the peaks where none can.
 
-Read "impossible" precisely: impossible **under the configured model**, which is C/H/N/O/P/S only,
-singly charged, halogens and alkali metals off. A halogenated, alkali-adducted, deuterated or
-multiply charged fragment can be perfectly real and still be rejected. Multiply charged ions are
+Read "impossible" precisely: impossible **under the configured model**, which by default is
+C/H/N/O/P/S only, singly charged, monoisotopic, halogens and alkali metals off. A halogenated,
+alkali-adducted, deuterated or multiply charged fragment can be perfectly real and still be
+rejected. Halogens can be switched on — see [Halogens](#halogens). Multiply charged ions are
 the largest such class in our data. If your spectra are rich in any of those, measure the
 false-flag rate on your own reference set before deploying.
 
@@ -29,16 +30,18 @@ import sys; sys.path.insert(0, "/path/to/impossible-mass-denoise")
 from denoise import denoise_spectrum
 ```
 
-The 1.5 MB `possible_mass_table.npz` must sit beside `impossible_mass_denoise.py`. It is a
-precomputed table of reachable masses on a 1 mDa grid up to 1700 Da; without it the module falls
-back to solving each mass, which is correct but far slower.
+Two precomputed tables must sit beside `impossible_mass_denoise.py`: `possible_mass_table.npz`
+(1.5 MB, CHNOPS) and `possible_mass_table_halogen.npz` (1.9 MB, CHNOPS plus Cl/F/Br/I). Each holds
+the reachable masses on a 1 mDa grid up to 1700 Da. Without a table the module falls back to
+solving each mass, which is correct but far slower — up to a minute per mass with halogens.
 
 ## Use
 
 ```python
 from denoise import denoise_spectrum
 
-kept = denoise_spectrum(peaks, mode="neg")     # peaks = [(mz, intensity), ...]
+kept = denoise_spectrum(peaks, mode="neg")                   # peaks = [(mz, intensity), ...]
+kept = denoise_spectrum(peaks, mode="neg", halogens=True)    # also allow Cl/F/Br/I
 ```
 
 `mode` is `"neg"` or `"pos"`. The return is the surviving peaks, same tuples, same order.
@@ -50,8 +53,9 @@ the underlying module treats any string that is not exactly `"neg"` as positive,
 
 An empty result is legitimate and means every peak in that spectrum was impossible.
 
-Also available: `is_possible(mz, mode)` for a single peak, `fingerprint()` for the chemistry hash,
-`table_status()` for whether the table loaded, and `cache_size()` / `clear_cache()` (see below).
+Also available: `is_possible(mz, mode, halogens=False)` for a single peak, `fingerprint()` for the
+chemistry hash, `table_status()` and `halogen_table_status()` for whether each table loaded, and
+`cache_size()` / `clear_cache()` (see below).
 
 ## Where it goes in the pipeline
 
@@ -84,7 +88,9 @@ A 20-peak spectrum of entirely unseen masses costs about 0.12 ms, so 50,000 such
 6 seconds of CPU. Real workloads land between the two, since fragment masses recur heavily across a
 database. Quote the cold figure when sizing.
 
-Memory: the table is ~1.5 MB on disk and loads once per process.
+The halogen table is exactly as fast: 5.0 µs cold, same as CHNOPS.
+
+Memory: each table is under 2 MB on disk and loads once per process, on first use.
 
 **The filter memoises every m/z it is asked about, and that cache is unbounded.** It grows by
 roughly 26 MB of resident memory per 100,000 distinct masses. For batch jobs this is free speed and
@@ -93,13 +99,44 @@ only the re-lookups, which are microseconds. `cache_size()` reports the current 
 
 ## Configuration — do not change these without re-validating
 
-The deployed settings are `d_max=0`, `union=True`, halogens off, alkali off. `denoise.py` pins
-them. The module exposes other validity models for research use; they were measured to be worse.
-Halogens off in particular is deliberate: the shipped table is CHNOPS-only, and turning halogens on
-falls back to the solver at roughly 300 ms per peak.
+The validated settings are `d_max=0`, `union=True`, halogens off, alkali off, and they are the
+defaults in `denoise.py`. The module exposes other validity models for research use; they were
+measured to be worse. `halogens=True` is supported and fast, but it is a trade-off rather than a
+strict improvement — read [Halogens](#halogens) before turning it on.
 
 Log `fingerprint()` alongside results. Two runs that disagree on that hash are not running the same
 chemistry, and their outputs are not comparable. The validated value is `5aae4ec26694da4d`.
+
+## Halogens
+
+`denoise_spectrum(peaks, mode, halogens=True)` adds Cl, F, Br and I to the alphabet. What that buys
+and what it costs:
+
+**It keeps fragments only halogens can explain.** Brominated and chlorinated compounds often
+fragment in negative mode by losing a halide, so bromide (m/z 78.919) or chloride can be the base
+peak. No CHNOPS composition reaches those masses, so the default filter deletes them, and with them
+most of the spectrum's intensity. The halogen alphabet keeps them.
+
+**It rejects less noise everywhere else.** More elements make more masses explainable, so fewer
+peaks can be flagged. Share of masses the filter can reject, 5 mDa tolerance, negative mode:
+
+| mass range | CHNOPS | with halogens |
+|---|---|---|
+| 50–150 Da | 83% | 82% |
+| 150–250 Da | 64% | 60% |
+| 250–350 Da | 45% | 40% |
+| 350–450 Da | 26% | 19% |
+| 450–550 Da | 8% | 2% |
+| 50–700 Da overall | 35% | 31% |
+
+**Fluorine alone rarely needs it.** Fluorine sits within 0.002 Da of a whole-number mass, so
+perfluorinated fragments usually land near some CHNOPS composition and survive the default filter
+anyway. The damage comes from chlorine and bromine, whose masses sit far from whole numbers.
+
+Turn it on when halogenated compounds matter to you and you can accept the weaker filtering above
+about 300 Da. The halogen table was verified against the solver with zero disagreements on 320
+random masses at 5 and 20 mDa and on 398 fragment peaks from real halogenated spectra. It carries
+the same chemistry fingerprint as the CHNOPS table; the alphabet is recorded in each table's config.
 
 ## What it does not do
 
@@ -108,13 +145,17 @@ chemistry, and their outputs are not comparable. The validated value is `5aae4ec
 - It cannot help a spectrum whose peaks are all chemically plausible. On our TTOF methods it finds
   nothing to remove in over half of spectra, because at lower mass accuracy more masses have a
   valid composition.
-- It saturates at high mass. Above roughly 670 Da, CHNOPS compositions are dense enough that
-  almost any mass is reachable, so there is little left to flag.
+- It saturates at high mass. At the default 5 mDa tolerance it can reject almost nothing above
+  about 550 Da, and nothing at all above about 670 Da, where every 1 mDa slot holds a valid
+  composition.
 - It is not a formula assignment. A `True` verdict means "some composition exists", not "this
   composition is the one".
-- A `False` verdict means "no CHNOPS composition exists at this tolerance, singly charged". It does
-  not mean the peak is not a real ion — see the note at the top about halogens, alkali adducts,
-  deuterium and multiple charge.
+- A `False` verdict means "no composition in the alphabet exists at this tolerance, singly
+  charged, monoisotopic". It does not mean the peak is not a real ion — see the note at the top
+  about halogens, alkali adducts, deuterium and multiple charge.
+- It does not model isotopes. The alphabet uses the lightest isotope of each element, so the heavy
+  isotope peaks of chlorine and bromine — ³⁷Cl at about a quarter of natural chlorine, ⁸¹Br at
+  about half of natural bromine — are rejected even with `halogens=True`.
 - Above the table ceiling of 1700 Da every mass is reported possible. That is very nearly true
   chemically, and nothing in LC-BinBase exceeds it, but do not read it as a verdict.
 
