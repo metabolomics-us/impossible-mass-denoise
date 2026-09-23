@@ -56,14 +56,20 @@ clear_cache()
 check("clear_cache empties the memo", cache_size() == 0 and before > 0,
       f"{before} entries -> {cache_size()}")
 
-# throughput: this is a table lookup, it should be microseconds per peak
-big = [(50 + i * 0.7311, 1.0) for i in range(2000)]
-denoise_spectrum(big[:50], "neg")            # warm the cache
+# throughput. Measure COLD - masses never asked about before - because repeating one spectrum
+# five times mostly measures the memo cache and flatters the result by about 8x.
+import random
+random.seed(7)
+uniq = [(round(random.uniform(50, 1000), 4), 1.0) for _ in range(20000)]
+clear_cache()
 t0 = time.perf_counter()
-for _ in range(5):
-    denoise_spectrum(big, "neg")
-us = (time.perf_counter() - t0) / (5 * len(big)) * 1e6
-check("throughput under 50 us per peak", us < 50, f"{us:.1f} us/peak")
+denoise_spectrum(uniq, "neg")
+cold = (time.perf_counter() - t0) / len(uniq) * 1e6
+t0 = time.perf_counter()
+denoise_spectrum(uniq, "neg")                 # same masses: all cache hits
+warm = (time.perf_counter() - t0) / len(uniq) * 1e6
+check("cold lookup under 30 us per peak", cold < 30, f"{cold:.1f} us/peak")
+check("warm lookup faster than cold", warm < cold, f"{warm:.1f} us/peak warm")
 
 print(f"\n{len(fails)} failure(s)" if fails else "\nall checks passed")
 sys.exit(1 if fails else 0)

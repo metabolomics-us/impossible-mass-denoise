@@ -1,8 +1,13 @@
 # Impossible-mass denoising
 
 A noise filter for MS/MS fragment spectra. For each fragment m/z it asks whether **any** CHNOPS
-composition could produce that exact mass at that polarity. A peak with no chemically legal
-composition cannot be a real fragment ion, so it is removed.
+composition could produce that exact mass at that polarity, and removes the peaks where none can.
+
+Read "impossible" precisely: impossible **under the configured model**, which is C/H/N/O/P/S only,
+singly charged, halogens and alkali metals off. A halogenated, alkali-adducted, deuterated or
+multiply charged fragment can be perfectly real and still be rejected. Multiply charged ions are
+the largest such class in our data. If your spectra are rich in any of those, measure the
+false-flag rate on your own reference set before deploying.
 
 It needs nothing but the m/z and the polarity — no precursor formula, no adduct, no candidate
 structure. That is the point: it runs on unannotated bins, where formula-based denoisers cannot.
@@ -14,6 +19,14 @@ Python 3.9+ and numpy. Nothing else. Verified on a clean virtualenv with Python 
 ```bash
 pip install -r requirements.txt
 python test_smoke.py          # exits non-zero on any failure
+```
+
+This is a drop-in directory, **not** a pip-installable distribution — there is no `pyproject.toml`
+and nothing to `pip install .`. Either run from inside the directory, or put it on the path:
+
+```python
+import sys; sys.path.insert(0, "/path/to/impossible-mass-denoise")
+from denoise import denoise_spectrum
 ```
 
 The 1.5 MB `possible_mass_table.npz` must sit beside `impossible_mass_denoise.py`. It is a
@@ -42,21 +55,34 @@ Also available: `is_possible(mz, mode)` for a single peak, `fingerprint()` for t
 
 ## Where it goes in the pipeline
 
-Immediately **before** spectral library search, on the query spectrum, and after any existing
-intensity floor. It replaces nothing — the current 1% base-peak cut can stay.
+On the query spectrum, immediately **before** spectral library search, and **before** any
+intensity floor — that is the order the filter was validated in: the filter sees the raw peak list,
+and the 1% base-peak cut is applied to what survives. It replaces nothing; that cut can stay.
+
+Applying the floor first has not been tested and is not equivalent, because the floor is relative
+to the base peak and removing peaks can change which peak that is.
 
 It is a pure function of the peak list. It has no state, no I/O after the table loads, no network
 calls, and is thread-safe for reads. The module memoises results in a process-local dict, so a
 long-lived worker gets faster as fragment masses recur.
 
-Applying it to library spectra as well as query spectra is supported and performs slightly better
-in our tests, but it means re-processing the library. Query-side only is the simpler deployment.
+Applying it to library spectra as well as query spectra raises the similarity scores slightly
+further in our tests — it does not improve which candidate ranks first — and it means re-processing
+the library. Query-side only is the simpler deployment.
 
 ## Performance
 
-**1.6 µs per peak** measured by the smoke test on this hardware — about 0.03 ms for a 20-peak
-spectrum. Filtering a 50,000-spectrum database is a few seconds of CPU. The filter is a table
-lookup; if a pipeline using it is slow, the cost is elsewhere.
+Two numbers, because they differ by a factor of eight and only one of them describes a fresh
+workload. On this hardware, over 100,000 distinct masses:
+
+| | per peak |
+|---|---|
+| cold — a mass not seen before | **5.8 µs** |
+| warm — a repeat of a mass already asked about | **0.7 µs** |
+
+A 20-peak spectrum of entirely unseen masses costs about 0.12 ms, so 50,000 such spectra is around
+6 seconds of CPU. Real workloads land between the two, since fragment masses recur heavily across a
+database. Quote the cold figure when sizing.
 
 Memory: the table is ~1.5 MB on disk and loads once per process.
 
@@ -86,6 +112,9 @@ chemistry, and their outputs are not comparable. The validated value is `5aae4ec
   almost any mass is reachable, so there is little left to flag.
 - It is not a formula assignment. A `True` verdict means "some composition exists", not "this
   composition is the one".
+- A `False` verdict means "no CHNOPS composition exists at this tolerance, singly charged". It does
+  not mean the peak is not a real ion — see the note at the top about halogens, alkali adducts,
+  deuterium and multiple charge.
 - Above the table ceiling of 1700 Da every mass is reported possible. That is very nearly true
   chemically, and nothing in LC-BinBase exceeds it, but do not read it as a verdict.
 
