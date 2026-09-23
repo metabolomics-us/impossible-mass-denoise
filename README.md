@@ -136,7 +136,7 @@ is package-relative and a command-line demo that read internal data files was re
 built by `build_possible_mass_table.py` in the Fiehn lab research repository; rebuilding it should
 reproduce fingerprint `5aae4ec26694da4d`.
 
-No licence is set yet — add one before anyone outside the lab relies on this.
+Released under the MIT License — see `LICENSE`.
 
 Method: J. Meija, "Mathematical tools in analytical mass spectrometry" (2006) — the Diophantine
 feasibility test for elemental compositions. The chemical-validity layer on top (SENIOR rules,
