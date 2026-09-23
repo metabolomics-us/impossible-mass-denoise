@@ -9,7 +9,7 @@ structure. That is the point: it runs on unannotated bins, where formula-based d
 
 ## Install
 
-Python 3.8+ and numpy. Nothing else.
+Python 3.9+ and numpy. Nothing else. Verified on a clean virtualenv with Python 3.9.6 and numpy 2.0.2.
 
 ```bash
 pip install -r requirements.txt
@@ -31,8 +31,14 @@ kept = denoise_spectrum(peaks, mode="neg")     # peaks = [(mz, intensity), ...]
 `mode` is `"neg"` or `"pos"`. The return is the surviving peaks, same tuples, same order.
 Intensities are passed through untouched — this filter removes peaks, it never rescales them.
 
+`mode` is validated: anything other than `"neg"` or `"pos"` raises `ValueError`. This matters —
+the underlying module treats any string that is not exactly `"neg"` as positive, so an unvalidated
+`"negative"` would silently score the wrong polarity.
+
+An empty result is legitimate and means every peak in that spectrum was impossible.
+
 Also available: `is_possible(mz, mode)` for a single peak, `fingerprint()` for the chemistry hash,
-and `table_status()` for whether the table loaded.
+`table_status()` for whether the table loaded, and `cache_size()` / `clear_cache()` (see below).
 
 ## Where it goes in the pipeline
 
@@ -53,6 +59,11 @@ spectrum. Filtering a 50,000-spectrum database is a few seconds of CPU. The filt
 lookup; if a pipeline using it is slow, the cost is elsewhere.
 
 Memory: the table is ~1.5 MB on disk and loads once per process.
+
+**The filter memoises every m/z it is asked about, and that cache is unbounded.** It grows by
+roughly 26 MB of resident memory per 100,000 distinct masses. For batch jobs this is free speed and
+the process exits anyway. For a long-lived service, call `clear_cache()` periodically — it costs
+only the re-lookups, which are microseconds. `cache_size()` reports the current entry count.
 
 ## Configuration — do not change these without re-validating
 
@@ -75,6 +86,8 @@ chemistry, and their outputs are not comparable. The validated value is `5aae4ec
   almost any mass is reachable, so there is little left to flag.
 - It is not a formula assignment. A `True` verdict means "some composition exists", not "this
   composition is the one".
+- Above the table ceiling of 1700 Da every mass is reported possible. That is very nearly true
+  chemically, and nothing in LC-BinBase exceeds it, but do not read it as a verdict.
 
 ## Status
 

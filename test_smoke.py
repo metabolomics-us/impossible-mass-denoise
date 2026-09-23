@@ -6,7 +6,8 @@ masses survive, an obviously-impossible one is removed, and throughput is in the
 import sys
 import time
 
-from denoise import denoise_spectrum, is_possible, fingerprint, table_status
+from denoise import (denoise_spectrum, is_possible, fingerprint, table_status,
+                     cache_size, clear_cache)
 
 EXPECTED_FINGERPRINT = "5aae4ec26694da4d"
 fails = []
@@ -39,6 +40,21 @@ spec = [(59.0138, 100.0), (80.1000, 12.0), (96.9696, 45.0)]
 kept = denoise_spectrum(spec, "neg")
 check("removes only the impossible peak", kept == [(59.0138, 100.0), (96.9696, 45.0)],
       f"kept {kept}")
+
+# a mistyped polarity must raise, not silently score the other mode
+for bad in ("negative", "NEG", "positive", ""):
+    try:
+        is_possible(100.05, bad)
+        check(f"rejects mode={bad!r}", False, "accepted silently")
+    except ValueError:
+        check(f"rejects mode={bad!r}", True)
+
+# the cache is unbounded by design; clear_cache must actually empty it
+denoise_spectrum([(60 + i * 0.13, 1.0) for i in range(500)], "neg")
+before = cache_size()
+clear_cache()
+check("clear_cache empties the memo", cache_size() == 0 and before > 0,
+      f"{before} entries -> {cache_size()}")
 
 # throughput: this is a table lookup, it should be microseconds per peak
 big = [(50 + i * 0.7311, 1.0) for i in range(2000)]
