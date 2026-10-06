@@ -10,6 +10,8 @@ and the removal of a command-line demo that read internal data files.
 """
 from __future__ import annotations
 
+import bisect
+
 import impossible_mass_denoise as _imd
 
 __all__ = ["denoise_spectrum", "is_possible", "fingerprint", "table_status",
@@ -21,6 +23,9 @@ D_SHIFT = 2.01410177812 - 1.00782503223   # mass a deuterium label adds over hyd
 # 5 mDa because a stored precursor m/z and the measured peak can differ by 10 mDa or more in
 # uncalibrated spectra.
 PRECURSOR_TOL = 0.020
+# 37Cl - 35Cl and 81Br - 79Br (issue #3), matched within the filter's 5 mDa
+HEAVY_HALOGEN_SPACING = (36.96590260 - 34.96885268, 80.91628970 - 78.91833710)
+ISOTOPE_TOL = 0.005
 
 
 def _check_mode(mode):
@@ -57,13 +62,21 @@ def is_possible(mz: float, mode: str = "neg", halogens: bool = False, *,
                for k in range(deuterium + 1) if mz - k * D_SHIFT > 0)
 
 
+def _near(sorted_mz, target):
+    """Is any value of the sorted list within ISOTOPE_TOL of target?"""
+    i = bisect.bisect_left(sorted_mz, target - ISOTOPE_TOL)
+    return i < len(sorted_mz) and sorted_mz[i] <= target + ISOTOPE_TOL
+
+
 def denoise_spectrum(peaks, mode: str = "neg", halogens: bool = False, *, deuterium: int = 0,
                      precursor_mz: float | None = None):
     """Return the peaks that survive the filter, in the order given.
 
     halogens=False (the default) is the validated configuration. halogens=True keeps fragments
     that need Cl/F/Br/I to explain them - bromide and chloride ions, for example - at the cost of
-    rejecting fewer noise peaks overall; see the README before switching it on.
+    rejecting fewer noise peaks overall; see the README before switching it on. With halogens on,
+    a 37Cl or 81Br isotope peak is also kept when its light partner, 1.997 or 1.998 Da below, is
+    in the spectrum and kept (issue #3); a heavy-isotope peak without a kept partner is removed.
 
     deuterium=n keeps the deuterated ions of a deuterium-labelled internal standard, as described
     in is_possible (issue #1). Pass the standard's label count from the library entry or its name;
@@ -80,10 +93,21 @@ def denoise_spectrum(peaks, mode: str = "neg", halogens: bool = False, *, deuter
     """
     _check_mode(mode)
     _check_deuterium(deuterium)
+    peaks = list(peaks)
     prec = None if precursor_mz is None else float(precursor_mz)
-    return [p for p in peaks
-            if (prec is not None and abs(p[0] - prec) <= PRECURSOR_TOL)
-            or is_possible(p[0], mode, halogens, deuterium=deuterium)]
+    keep = [(prec is not None and abs(p[0] - prec) <= PRECURSOR_TOL)
+            or is_possible(p[0], mode, halogens, deuterium=deuterium) for p in peaks]
+    if halogens:
+        # Walk up in m/z so a heavy-isotope peak can lean on a partner kept just before it, and a
+        # chain such as two chlorines (M, M+2, M+4) carries through.
+        kept_mz = []
+        for i in sorted(range(len(peaks)), key=lambda j: peaks[j][0]):
+            mz = peaks[i][0]
+            if not keep[i] and any(_near(kept_mz, mz - d) for d in HEAVY_HALOGEN_SPACING):
+                keep[i] = True
+            if keep[i]:
+                bisect.insort(kept_mz, mz)
+    return [p for p, k in zip(peaks, keep) if k]
 
 
 def fingerprint() -> str:
