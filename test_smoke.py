@@ -257,6 +257,14 @@ check("default removes the doubly charged imatinib precursor, the base peak",
 check("precursor_mz= keeps the doubly charged precursor",
       denoise_spectrum(IMATINIB, "pos", precursor_mz=IMATINIB_2H) == IMATINIB)
 NOISY = IMATINIB + [(80.1000, 40.0)]           # 80.1000 has no composition
+# negative mode: ATP [M-2H]2- has no singly charged composition either
+ATP_2H = (ion_mz("C10H14N5O13P3", "neg") + ELECTRON) / 2       # [M-2H]2- of C10H16N5O13P3
+check("default removes the doubly charged ATP precursor", not is_possible(ATP_2H, "neg"))
+check("precursor_mz= keeps a [M-2H]2- precursor",
+      denoise_spectrum([(ion_mz("O3P", "neg"), 60.0), (ATP_2H, 100.0)], "neg",
+                       precursor_mz=ATP_2H) == [(ion_mz("O3P", "neg"), 60.0), (ATP_2H, 100.0)])
+# no per-peak 2+ rule: the default still treats every peak as singly charged
+check("is_possible still rejects the doubly charged imatinib ion", not is_possible(IMATINIB_2H, "pos"))
 check("precursor_mz= keeps the precursor and nothing else",
       denoise_spectrum(NOISY, "pos", precursor_mz=IMATINIB_2H) == IMATINIB)
 check("precursor_mz= matches the precursor peak within 20 mDa",

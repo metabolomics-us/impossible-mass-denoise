@@ -176,6 +176,19 @@ about 300 Da. The halogen table was verified against the solver with zero disagr
 random masses at 5 and 20 mDa and on 398 fragment peaks from real halogenated spectra. It carries
 the same chemistry fingerprint as the CHNOPS table; the alphabet is recorded in each table's config.
 
+## Doubly charged ions
+
+The filter treats every peak as singly charged, so a doubly charged ion can be real and still be
+removed. When the precursor is multiply charged, as the library adduct says for [M+2H]²⁺ or
+[M−2H]²⁻, pass its m/z with `precursor_mz=` and the precursor is kept whatever its verdict.
+
+There is no option to accept any peak as doubly charged. A fragment's charge is not known from
+the spectrum, and such a rule makes most masses explainable: at 5 mDa, nothing above about 276 m/z
+could be removed any more, and the share of masses the filter can reject between 50 and 700 Da
+falls from 35% to 13%. In our Orbitrap data, the extra peaks such a rule would keep behave like
+noise across repeat scans. The research module keeps the rule as `possible_z2` for anyone who
+wants to measure it on their own data.
+
 ## What it does not do
 
 - It does not decide whether an annotation is correct. It removes peaks; everything downstream is
