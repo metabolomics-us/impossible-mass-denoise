@@ -5,13 +5,17 @@ composition could produce that exact mass at that polarity, and removes the peak
 
 Read "impossible" precisely: impossible **under the configured model**, which by default is
 C/H/N/O/P/S only, singly charged, monoisotopic, halogens and alkali metals off. A halogenated,
-alkali-adducted, deuterated or multiply charged fragment can be perfectly real and still be
-rejected. Halogens can be switched on — see [Halogens](#halogens). Multiply charged ions are
-the largest such class in our data. If your spectra are rich in any of those, measure the
-false-flag rate on your own reference set before deploying.
+alkali-adducted, isotope-labelled or multiply charged fragment can be perfectly real and still be
+rejected. Halogens, isotope labels and double charge can each be switched on — see
+[Halogens](#halogens) and [Labelled standards and doubly charged ions](#labelled-standards-and-doubly-charged-ions).
+Multiply charged ions are the largest such class in our data. If your spectra are rich in any of
+those, measure the false-flag rate on your own reference set before deploying.
 
 It needs nothing but the m/z and the polarity — no precursor formula, no adduct, no candidate
 structure. That is the point: it runs on unannotated bins, where formula-based denoisers cannot.
+
+It removes noise on Orbitrap data. On TTOF data it has shown no measurable benefit — see
+[Which data it helps](#which-data-it-helps).
 
 ## Install
 
@@ -43,6 +47,8 @@ from denoise import denoise_spectrum
 kept = denoise_spectrum(peaks, mode="neg")                   # peaks = [(mz, intensity), ...]
 kept = denoise_spectrum(peaks, mode="neg", halogens=True)    # also allow Cl/F/Br/I
 kept = denoise_spectrum(peaks, mode="pos", precursor_mz=prec, keep_top=1)   # protect precursor + base peak
+kept = denoise_spectrum(peaks, mode="pos", labels={"D": 9})  # a D9-labelled internal standard
+kept = denoise_spectrum(peaks, mode="pos", allow_z2=True)    # also accept doubly charged ions
 ```
 
 `mode` is `"neg"` or `"pos"`. The return is the surviving peaks, same tuples, same order.
@@ -69,9 +75,14 @@ ions, and losing those peaks can make a standard fail to match. The cost is that
 keeps an impossible base peak that really is an artifact; a detector artifact can carry most of a
 spectrum's intensity.
 
-Also available: `is_possible(mz, mode, halogens=False)` for a single peak, `fingerprint()` for the
-chemistry hash, `table_status()` and `halogen_table_status()` for whether each table loaded, and
-`cache_size()` / `clear_cache()` (see below).
+Two more options, also off by default, widen what counts as possible instead of protecting single
+peaks: `labels=` for isotope-labelled standards and `allow_z2=True` for doubly charged ions. Both
+cost noise removal; see
+[Labelled standards and doubly charged ions](#labelled-standards-and-doubly-charged-ions).
+
+Also available: `is_possible(mz, mode, halogens=False, *, allow_z2=False, labels=None)` for a
+single peak, `fingerprint()` for the chemistry hash, `table_status()` and `halogen_table_status()`
+for whether each table loaded, and `cache_size()` / `clear_cache()` (see below).
 
 ## Where it goes in the pipeline
 
@@ -89,6 +100,24 @@ long-lived worker gets faster as fragment masses recur.
 Applying it to library spectra as well as query spectra raises the similarity scores slightly
 further in our tests — it does not improve which candidate ranks first — and it means re-processing
 the library. Query-side only is the simpler deployment.
+
+## Which data it helps
+
+It removes noise on high-mass-accuracy Orbitrap data. On TTOF data it has shown no measurable
+benefit.
+
+The check behind this used raw MS/MS scans from the lab's LC-BinBase methods. Each fragment ion was
+scored by how often it recurs across repeat scans of the same precursor, and removed ions were
+compared with kept ions of the same relative intensity. On the Orbitrap methods the removed ions
+recur far less often than the kept ones, so the filter is removing noise. On the TTOF HILIC methods
+removed and kept ions recur about equally often, so the removals are no better than chance. Below 1%
+of the base peak the two groups recur equally often on every method. Strong removed ions often recur
+in at least half the scans, so some of them are real ions the model does not cover, which is one
+more reason to protect the precursor and base peak (see [Use](#use)).
+
+Why TTOF differs has not been tested. Lower fragment mass accuracy is the obvious candidate, since
+the filter assumes masses within 5 mDa of exact. On TTOF data it removes real ions for no measured
+gain, so leave it off there unless your own data show otherwise.
 
 ## Performance
 
@@ -122,6 +151,9 @@ strict improvement — read [Halogens](#halogens) before turning it on.
 
 Log `fingerprint()` alongside results. Two runs that disagree on that hash are not running the same
 chemistry, and their outputs are not comparable. The validated value is `5aae4ec26694da4d`.
+The hash covers the chemistry, not the call: log the options you pass (`halogens`, `labels`,
+`allow_z2`, the protection options) as well, since they change what is removed without changing
+the hash.
 
 ## Halogens
 
@@ -149,28 +181,72 @@ peaks can be flagged. Share of masses the filter can reject, 5 mDa tolerance, ne
 perfluorinated fragments usually land near some CHNOPS composition and survive the default filter
 anyway. The damage comes from chlorine and bromine, whose masses sit far from whole numbers.
 
+**Heavy isotope peaks are kept through their light partner.** The alphabet holds the lightest
+isotope of each element, so a ³⁷Cl or ⁸¹Br peak such as ⁸¹Br⁻ often has no composition of its
+own. With `halogens=True`, `denoise_spectrum` also keeps a peak that sits 1.997 Da (³⁷Cl − ³⁵Cl)
+or 1.998 Da (⁸¹Br − ⁷⁹Br) above a peak it keeps, within 5 mDa. The rule chains, so the M+4 peak of
+CCl₃⁻ is kept through its M+2. A heavy isotope peak whose partner is missing or removed is still
+removed, and `is_possible`, which sees one peak at a time, still rejects it. The rule needs no new
+table and leaves the fingerprint unchanged. It also keeps ³⁴S isotope peaks, which sit 1.996 Da
+above their partner and are just as real. It could keep a noise peak that happens to sit at that
+spacing above a kept peak too, but each kept peak opens only a 10 mDa window, so that is rare.
+
 Turn it on when halogenated compounds matter to you and you can accept the weaker filtering above
 about 300 Da. The halogen table was verified against the solver with zero disagreements on 320
 random masses at 5 and 20 mDa and on 398 fragment peaks from real halogenated spectra. It carries
 the same chemistry fingerprint as the CHNOPS table; the alphabet is recorded in each table's config.
+
+## Labelled standards and doubly charged ions
+
+Two opt-in options for real ions that the default model rejects. Both make the filter remove less
+noise, so turn them on only for the spectra that need them.
+
+**`labels=` is for isotope-labelled internal standards.** Deuterium is not in the alphabet, so a
+labelled standard can lose its precursor, its base peak or every peak it has. Pass the standard's
+label counts, `labels={"D": 9}` for a D9 standard; the keys are `"D"`, `"13C"` and `"15N"`. A peak is
+then kept if taking off between none and all of those label mass shifts leaves a possible ion, so
+fragments that carry only some of the labels survive too. Pass it per call, for the standard's own
+spectra, not as a global setting. Each label combination costs one more lookup and one more cache
+entry: with `{"D": 9}` a cold lookup took about 10 µs a peak against 6 µs for the default, and
+mixed labels multiply (`{"D": 9, "13C": 6, "15N": 2}` is 210 combinations and about 95 µs a peak).
+
+**`allow_z2=True` also accepts a peak as a doubly charged ion**, [M+2H]²⁺ or [M−2H]²⁻. The singly
+charged ion of the same molecule, at 2 × m/z minus a proton (plus one in negative mode), is tested
+at twice the tolerance, because the mass error doubles. This is expensive. Above about 276 m/z (273
+in positive mode) that singly charged mass lands where every mass is possible at 10 mDa, so the
+filter removes nothing there. If what you need is a doubly charged precursor or base peak, protect it
+with `precursor_mz=` and `keep_top=` instead, and the rest of the spectrum is filtered as before.
+
+Share of masses the filter can reject, 5 mDa tolerance, negative mode (positive mode is within half
+a point):
+
+| mass range | default | `labels={"D": 9}` | `allow_z2=True` |
+|---|---|---|---|
+| 50–150 Da | 83% | 78% | 62% |
+| 150–250 Da | 64% | 58% | 24% |
+| 250–350 Da | 45% | 40% | <1% |
+| 350–450 Da | 26% | 21% | 0% |
+| 450–550 Da | 8% | 4% | 0% |
+| 50–700 Da overall | 35% | 31% | 13% |
 
 ## What it does not do
 
 - It does not decide whether an annotation is correct. It removes peaks; everything downstream is
   unchanged.
 - It cannot help a spectrum whose peaks are all chemically plausible. On our TTOF methods it finds
-  nothing to remove in over half of spectra, because at lower mass accuracy more masses have a
-  valid composition.
+  nothing to remove in over half of spectra; see [Which data it helps](#which-data-it-helps).
 - It saturates at high mass. At the default 5 mDa tolerance it can reject almost nothing above
-  about 550 Da, and nothing at all above about 670 Da, where every 1 mDa slot holds a valid
-  composition.
+  about 550 Da and nothing at all above 578 Da (508 Da with halogens). Above about 670 Da every
+  1 mDa slot of the table holds a valid composition.
 - It is not a formula assignment. A `True` verdict means "some composition exists", not "this
   composition is the one".
 - A `False` verdict means "no composition in the alphabet exists at this tolerance, singly
   charged, monoisotopic". It does not mean the peak is not a real ion — see the note at the top
-  about halogens, alkali adducts, deuterium and multiple charge.
-- It does not model isotopes. The alphabet uses the lightest isotope of each element, so the heavy
-  isotope peaks of chlorine and bromine — ³⁷Cl at about a quarter of natural chlorine, ⁸¹Br at
+  about halogens, alkali adducts, isotope labels and multiple charge.
+- The per-peak test does not model isotopes: the alphabet uses the lightest isotope of each
+  element. `denoise_spectrum` with `halogens=True` keeps a ³⁷Cl or ⁸¹Br peak whose light partner
+  it keeps (see [Halogens](#halogens)), but heavy isotope peaks of chlorine and bromine with no
+  kept partner — ³⁷Cl at about a quarter of natural chlorine, ⁸¹Br at
   about half of natural bromine — are rejected even with `halogens=True`.
 - Above the table ceiling of 1700 Da every mass is reported possible. That is very nearly true
   chemically, and nothing in LC-BinBase exceeds it, but do not read it as a verdict.
@@ -180,11 +256,10 @@ the same chemistry fingerprint as the CHNOPS table; the alphabet is recorded in 
 The filter is validated across the six LC-BinBase acquisition methods; the measurements live in the
 lab's internal findings document rather than here.
 
-Two limits matter operationally. The benefit is concentrated on high-mass-accuracy data — at lower
-mass accuracy more masses have a valid composition, so there is less to flag. And denoising raises
-the similarity of the correct match and of its competitors alike, so treat it as a score
-improvement rather than a ranking improvement: it will not by itself change which candidate ranks
-first.
+Two limits matter operationally. The benefit is concentrated on high-mass-accuracy data; see
+[Which data it helps](#which-data-it-helps). And denoising raises the similarity of the correct
+match and of its competitors alike, so treat it as a score improvement rather than a ranking
+improvement: it will not by itself change which candidate ranks first.
 
 ## Provenance
 
