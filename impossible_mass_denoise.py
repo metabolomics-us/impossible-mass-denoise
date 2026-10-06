@@ -153,8 +153,9 @@ _CACHE = {}
 # (~150 ms -> ~14 us). The table is consulted ONLY when the call matches the config it was
 # built for AND the chemistry fingerprint stored in the file matches this module's validity
 # functions -- a stale or foreign table can never silently outvote the solver. Any other
-# call (deuterated, halogens, alkali, single-model, sub-2-mDa tolerance, m/z above the table)
-# falls through to the Diophantine search unchanged.
+# call (deuterated, alkali, single-model, sub-2-mDa tolerance) falls through to the
+# Diophantine search unchanged. A table-eligible m/z above the table's ceiling is answered
+# "possible" directly, without the solver (see _table_lookup).
 # Packaged copy: the tables ship beside this file. The research-tree paths are the fallback,
 # so this module behaves identically when run from the research repository.
 _HERE = Path(__file__).resolve().parent
@@ -270,8 +271,17 @@ def _table_lookup(mz, tol, mode, d_max, use_halogens, alkali, union):
     t = load_halogen_table() if use_halogens else load_table()
     if t is None:
         return None
-    if not 0 < mz <= t["max_mz"] - tol:
+    if mz <= 0:
         return None
+    if mz > t["max_mz"] - tol:
+        # Above the ceiling every mass is possible, so answer here: the solver takes seconds per
+        # mass this high (issue #5). Exact, not approximate: every 1 mDa bin of the table's top
+        # 16 Da holds a valid composition (test_smoke checks this), and adding CH2 to a valid
+        # composition keeps it valid -- DBE and its parity are unchanged, the SENIOR slack is
+        # unchanged, H/C moves toward 2, every heteroatom/C ratio falls, and no rule caps C or H.
+        # Stepping up by CH2 (14.0157 Da) from that window puts a valid composition within one
+        # bin (1 mDa) of any higher mass, inside every tolerance the table serves (>= 2 mDa).
+        return True
     import numpy as np
     bins, b = t[mode], t["bin"]
     lo = max(int((mz - tol) / b) - 1, 0)
