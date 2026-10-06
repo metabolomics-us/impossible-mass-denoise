@@ -42,6 +42,7 @@ from denoise import denoise_spectrum
 
 kept = denoise_spectrum(peaks, mode="neg")                   # peaks = [(mz, intensity), ...]
 kept = denoise_spectrum(peaks, mode="neg", halogens=True)    # also allow Cl/F/Br/I
+kept = denoise_spectrum(peaks, mode="pos", precursor_mz=prec, keep_top=1)   # protect precursor + base peak
 ```
 
 `mode` is `"neg"` or `"pos"`. The return is the surviving peaks, same tuples, same order.
@@ -52,6 +53,21 @@ the underlying module treats any string that is not exactly `"neg"` as positive,
 `"negative"` would silently score the wrong polarity.
 
 An empty result is legitimate and means every peak in that spectrum was impossible.
+
+Three keyword options protect peaks from removal. All are off by default, so a plain call behaves
+exactly as before.
+
+- `precursor_mz=` keeps any peak within 5 mDa of the precursor m/z.
+- `keep_top=N` keeps the N most intense peaks (`1` is the base peak). Peaks tied at the cut-off are
+  all kept, so a base peak is never dropped.
+- `keep_mz=(...)` keeps any peak within 5 mDa of a listed m/z.
+
+Use `precursor_mz=<precursor>, keep_top=1` for spectra that feed internal-standard matching or
+retention-time correction. The filter can remove a real precursor or base peak when its chemistry
+is outside the alphabet, as with deuterium-labelled standards, alkali adducts and doubly charged
+ions, and losing those peaks can make a standard fail to match. The cost is that the guard also
+keeps an impossible base peak that really is an artifact; a detector artifact can carry most of a
+spectrum's intensity.
 
 Also available: `is_possible(mz, mode, halogens=False)` for a single peak, `fingerprint()` for the
 chemistry hash, `table_status()` and `halogen_table_status()` for whether each table loaded, and

@@ -16,6 +16,7 @@ __all__ = ["denoise_spectrum", "is_possible", "fingerprint", "table_status",
            "halogen_table_status", "clear_cache", "cache_size"]
 
 _MODES = ("neg", "pos")
+PROTECT_TOL = 0.005        # protected m/z are matched within the filter's own 5 mDa window
 
 
 def _check_mode(mode):
@@ -38,7 +39,8 @@ def is_possible(mz: float, mode: str = "neg", halogens: bool = False) -> bool:
                               use_halogens=bool(halogens))[0])
 
 
-def denoise_spectrum(peaks, mode: str = "neg", halogens: bool = False):
+def denoise_spectrum(peaks, mode: str = "neg", halogens: bool = False, *,
+                     precursor_mz: float | None = None, keep_top: int = 0, keep_mz=()):
     """Return the peaks that survive the filter, in the order given.
 
     halogens=False (the default) is the validated configuration. halogens=True keeps fragments
@@ -48,9 +50,33 @@ def denoise_spectrum(peaks, mode: str = "neg", halogens: bool = False):
     peaks is any iterable of (mz, intensity) pairs; the return is a list of the same pairs.
     Intensity is passed through untouched - this filter removes peaks, it never rescales them.
     An empty result is possible and legitimate: every peak in that spectrum was impossible.
+
+    Protection, all off by default (issue #2). A protected peak is kept whatever its verdict:
+      precursor_mz  any peak within 5 mDa of this m/z.
+      keep_top      the N most intense peaks; 1 keeps the base peak. Peaks tied at the cut-off
+                    are all kept, so a base peak is never dropped.
+      keep_mz       any peak within 5 mDa of one of these m/z values.
+    The filter can remove a real precursor or base peak when its chemistry is outside the
+    alphabet (deuterium labels, alkali adducts, double charge). Use precursor_mz=<precursor> and
+    keep_top=1 for spectra that feed internal-standard matching or retention-time correction.
+    The cost: an impossible base peak that really is an artifact is kept too.
     """
     _check_mode(mode)
-    return [p for p in peaks if is_possible(p[0], mode, halogens)]
+    if isinstance(keep_top, bool) or not isinstance(keep_top, int) or keep_top < 0:
+        raise ValueError(f"keep_top must be a non-negative int, got {keep_top!r}")
+    peaks = list(peaks)
+    targets = [float(m) for m in keep_mz]
+    if precursor_mz is not None:
+        targets.append(float(precursor_mz))
+    cutoff = None
+    if keep_top and peaks:
+        cutoff = sorted((p[1] for p in peaks), reverse=True)[min(keep_top, len(peaks)) - 1]
+
+    def protected(p):
+        return ((cutoff is not None and p[1] >= cutoff)
+                or any(abs(p[0] - t) <= PROTECT_TOL for t in targets))
+
+    return [p for p in peaks if protected(p) or is_possible(p[0], mode, halogens)]
 
 
 def fingerprint() -> str:

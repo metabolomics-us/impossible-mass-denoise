@@ -42,6 +42,30 @@ kept = denoise_spectrum(spec, "neg")
 check("removes only the impossible peak", kept == [(59.0138, 100.0), (96.9696, 45.0)],
       f"kept {kept}")
 
+# protection (issue #2) is off by default; when asked for, the precursor and the top peaks are
+# kept whatever their verdict. D9-TMAO [M+H]+ at 85.1322 and its fragment at 66.1200 are real
+# ions that need deuterium, which is outside the alphabet.
+TMAO = [(58.0651, 30.0), (66.1200, 20.0), (85.1322, 100.0)]
+check("protection off by default: impossible precursor removed",
+      denoise_spectrum(TMAO, "pos") == [(58.0651, 30.0)])
+check("precursor_mz keeps the precursor and nothing else",
+      denoise_spectrum(TMAO, "pos", precursor_mz=85.1322) == [(58.0651, 30.0), (85.1322, 100.0)])
+check("keep_top=1 keeps an impossible base peak",
+      denoise_spectrum([(80.1000, 100.0), (60.0808, 50.0)], "pos", keep_top=1)
+      == [(80.1000, 100.0), (60.0808, 50.0)])
+check("keep_top=1 keeps every peak tied for the base peak",
+      denoise_spectrum([(80.1000, 100.0), (85.1322, 100.0), (60.0808, 50.0)], "pos", keep_top=1)
+      == [(80.1000, 100.0), (85.1322, 100.0), (60.0808, 50.0)])
+check("keep_mz keeps a listed mass",
+      denoise_spectrum([(59.0138, 100.0), (120.1400, 12.0)], "neg", keep_mz=[120.14])
+      == [(59.0138, 100.0), (120.1400, 12.0)])
+for bad in (-1, 1.5, True):
+    try:
+        denoise_spectrum(TMAO, "pos", keep_top=bad)
+        check(f"rejects keep_top={bad!r}", False, "accepted silently")
+    except ValueError:
+        check(f"rejects keep_top={bad!r}", True)
+
 # halogens are opt-in. Bromide is the base peak of many brominated compounds in negative mode;
 # the default CHNOPS alphabet cannot explain it, the halogen alphabet can.
 BR = 78.9189
