@@ -234,14 +234,18 @@ LABELLED_PRECURSORS = [("D9-TMAO [M+H]+", "C3HD9NO", "pos", 9),
 check("default removes all three D9-TMAO ions", denoise_spectrum(TMAO_D9, "pos") == [])
 check("default removes the precursors of the five labelled standards in #1",
       not any(is_possible(ion_mz(f, mode), mode) for _, f, mode, _ in LABELLED_PRECURSORS))
-has_d = supports(denoise_spectrum, "deuterium") and supports(is_possible, "deuterium")
-expect_failure("#1", "deuterium=9 keeps the D9-TMAO ions and still removes noise",
-               has_d and denoise_spectrum(TMAO_D9 + [NOISE], "pos", deuterium=9) == TMAO_D9,
-               "" if has_d else "no deuterium option yet")
-expect_failure("#1", "deuterium= keeps the precursors of the five labelled standards",
-               has_d and all(is_possible(ion_mz(f, mode), mode, deuterium=n)
-                             for _, f, mode, n in LABELLED_PRECURSORS),
-               "" if has_d else "no deuterium option yet")
+check("deuterium=9 keeps the D9-TMAO ions and still removes noise",
+      denoise_spectrum(TMAO_D9 + [NOISE], "pos", deuterium=9) == TMAO_D9)
+check("deuterium= keeps the precursors of the five labelled standards",
+      all(is_possible(ion_mz(f, mode), mode, deuterium=n) for _, f, mode, n in LABELLED_PRECURSORS))
+check("deuterium=10 still removes a noise mass in both polarities",
+      not is_possible(NOISE[0], "pos", deuterium=10) and not is_possible(NOISE[0], "neg", deuterium=10))
+for bad in (-1, 1.5, True, "9"):
+    try:
+        denoise_spectrum(TMAO_D9, "pos", deuterium=bad)
+        check(f"rejects deuterium={bad!r}", False, "accepted silently")
+    except ValueError:
+        check(f"rejects deuterium={bad!r}", True)
 
 # #2 and #4: the precursor. Imatinib [M+2H]2+ is both the precursor and the base peak of its
 # spectrum. It is doubly charged, so no singly charged composition explains it. Callers know the
