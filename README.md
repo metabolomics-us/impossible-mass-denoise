@@ -161,6 +161,16 @@ peaks can be flagged. Share of masses the filter can reject, 5 mDa tolerance, ne
 perfluorinated fragments usually land near some CHNOPS composition and survive the default filter
 anyway. The damage comes from chlorine and bromine, whose masses sit far from whole numbers.
 
+**Heavy isotope peaks are kept through their light partner.** The alphabet holds the lightest
+isotope of each element, so a ³⁷Cl or ⁸¹Br peak such as ⁸¹Br⁻ often has no composition of its
+own. With `halogens=True`, `denoise_spectrum` also keeps a peak that sits 1.997 Da (³⁷Cl − ³⁵Cl)
+or 1.998 Da (⁸¹Br − ⁷⁹Br) above a peak it keeps, within 5 mDa. The rule chains, so the M+4 peak of
+CCl₃⁻ is kept through its M+2. A heavy isotope peak whose partner is missing or removed is still
+removed, and `is_possible`, which sees one peak at a time, still rejects it. The rule needs no new
+table and leaves the fingerprint unchanged. It also keeps ³⁴S isotope peaks, which sit 1.996 Da
+above their partner and are just as real, and it can keep a weak peak that happens to sit at that
+spacing above a kept peak.
+
 Turn it on when halogenated compounds matter to you and you can accept the weaker filtering above
 about 300 Da. The halogen table was verified against the solver with zero disagreements on 320
 random masses at 5 and 20 mDa and on 398 fragment peaks from real halogenated spectra. It carries
@@ -181,8 +191,10 @@ the same chemistry fingerprint as the CHNOPS table; the alphabet is recorded in 
 - A `False` verdict means "no composition in the alphabet exists at this tolerance, singly
   charged, monoisotopic". It does not mean the peak is not a real ion — see the note at the top
   about halogens, alkali adducts, deuterium and multiple charge.
-- It does not model isotopes. The alphabet uses the lightest isotope of each element, so the heavy
-  isotope peaks of chlorine and bromine — ³⁷Cl at about a quarter of natural chlorine, ⁸¹Br at
+- The per-peak test does not model isotopes: the alphabet uses the lightest isotope of each
+  element. `denoise_spectrum` with `halogens=True` keeps a ³⁷Cl or ⁸¹Br peak whose light partner
+  it keeps (see [Halogens](#halogens)), but heavy isotope peaks of chlorine and bromine with no
+  kept partner — ³⁷Cl at about a quarter of natural chlorine, ⁸¹Br at
   about half of natural bromine — are rejected even with `halogens=True`.
 - Above the table ceiling of 1700 Da every mass is reported possible, immediately and without the
   solver. That is exact: every 1 mDa slot in the table's top 16 Da holds a valid composition, and

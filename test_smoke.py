@@ -263,8 +263,10 @@ check("precursor_mz= matches the precursor peak within 20 mDa",
       denoise_spectrum(NOISY, "pos", precursor_mz=IMATINIB_2H + 0.015) == IMATINIB
       and denoise_spectrum(NOISY, "pos", precursor_mz=IMATINIB_2H + 0.025) == IMATINIB[:1])
 
-# #3: heavy halogen isotopes. The alphabet holds 35Cl and 79Br only, so with halogens on the light
-# peak of each pattern survives and its 37Cl or 81Br partners do not.
+# #3: heavy halogen isotopes. The alphabet holds 35Cl and 79Br only, so on its own a 37Cl or 81Br
+# peak has no composition. With halogens on, a heavy peak is kept when its light partner is kept,
+# and the rule chains: in CCl3- neither heavy peak has a composition of its own, so M+4 is kept
+# only through the M+2 kept before it.
 CL_SHIFT = 36.965902602 - ATOM["Cl"]          # 37Cl - 35Cl
 BR_SHIFT = 80.9162897 - ATOM["Br"]            # 81Br - 79Br
 bromide, chloride, ccl3 = ion_mz("Br", "neg"), ion_mz("Cl", "neg"), ion_mz("CCl3", "neg")
@@ -275,9 +277,14 @@ HALOGEN_PATTERNS = [
 ]
 for name, pattern in HALOGEN_PATTERNS:
     kept = denoise_spectrum(pattern, "neg", halogens=True)
-    check(f"halogens=True keeps the light peak of {name}", pattern[0] in kept)
-    expect_failure("#3", f"halogens=True keeps every isotope peak of {name}", kept == pattern,
-                   f"kept {len(kept)} of {len(pattern)}")
+    check(f"halogens=True keeps every isotope peak of {name}", kept == pattern,
+          f"kept {len(kept)} of {len(pattern)}")
+    check(f"default removes every peak of {name}", denoise_spectrum(pattern, "neg") == [])
+br_pair = HALOGEN_PATTERNS[0][1]
+check("isotope partners work on unsorted input and keep the input order",
+      denoise_spectrum(br_pair[::-1], "neg", halogens=True) == br_pair[::-1])
+check("81Br- without its light partner is still removed with halogens",
+      denoise_spectrum([(59.0138, 100.0), br_pair[1]], "neg", halogens=True) == [(59.0138, 100.0)])
 
 print(f"\n{len(fails)} failure(s), {len(xfails)} expected failure(s)" if fails
       else f"\nall checks passed, {len(xfails)} expected failure(s)")
