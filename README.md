@@ -47,6 +47,7 @@ from denoise import denoise_spectrum
 kept = denoise_spectrum(peaks, mode="neg")                   # peaks = [(mz, intensity), ...]
 kept = denoise_spectrum(peaks, mode="neg", halogens=True)    # also allow Cl/F/Br/I
 kept = denoise_spectrum(peaks, mode="pos", deuterium=9)      # a D9-labelled internal standard
+kept = denoise_spectrum(peaks, mode="pos", precursor_mz=prec)   # never remove the precursor
 ```
 
 `mode` is `"neg"` or `"pos"`. The return is the surviving peaks, same tuples, same order.
@@ -69,6 +70,16 @@ is not a label. Use the option only for that standard's spectra: each label adds
 makes the filter a little more permissive. With `deuterium=9`, the share of masses between 50 and
 700 Da that the filter can reject falls from 35% to 31%, and a cold lookup takes about 9 µs
 instead of 5 to 6. ¹³C and ¹⁵N labels are not covered.
+
+**Keeping the precursor.** The filter judges every peak by its m/z alone, so it can remove the
+precursor itself: a doubly charged precursor has no singly charged composition, and a precursor
+measured more than 5 mDa off its true mass can miss every composition. `precursor_mz=` keeps any
+peak within 20 mDa of the precursor m/z you pass, from the library entry or the scan header; the
+filter does not guess it from the peaks. The window is wider than the filter's 5 mDa because a
+stored precursor m/z and the measured peak can differ by 10 mDa or more in uncalibrated spectra.
+It is off by default, costs one peak per spectrum and changes nothing else. A matcher that removes
+the precursor before scoring gets the same score with or without it; the option keeps the peak
+for anything else that reads it.
 
 Also available: `is_possible(mz, mode, halogens=False, *, deuterium=0)` for a single peak,
 `fingerprint()` for the chemistry hash, `table_status()` and `halogen_table_status()` for whether

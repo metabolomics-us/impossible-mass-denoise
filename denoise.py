@@ -17,6 +17,10 @@ __all__ = ["denoise_spectrum", "is_possible", "fingerprint", "table_status",
 
 _MODES = ("neg", "pos")
 D_SHIFT = 2.01410177812 - 1.00782503223   # mass a deuterium label adds over hydrogen (issue #1)
+# A peak within 20 mDa of precursor_mz counts as the precursor (issue #2). Wider than the filter's
+# 5 mDa because a stored precursor m/z and the measured peak can differ by 10 mDa or more in
+# uncalibrated spectra.
+PRECURSOR_TOL = 0.020
 
 
 def _check_mode(mode):
@@ -53,7 +57,8 @@ def is_possible(mz: float, mode: str = "neg", halogens: bool = False, *,
                for k in range(deuterium + 1) if mz - k * D_SHIFT > 0)
 
 
-def denoise_spectrum(peaks, mode: str = "neg", halogens: bool = False, *, deuterium: int = 0):
+def denoise_spectrum(peaks, mode: str = "neg", halogens: bool = False, *, deuterium: int = 0,
+                     precursor_mz: float | None = None):
     """Return the peaks that survive the filter, in the order given.
 
     halogens=False (the default) is the validated configuration. halogens=True keeps fragments
@@ -68,10 +73,17 @@ def denoise_spectrum(peaks, mode: str = "neg", halogens: bool = False, *, deuter
     peaks is any iterable of (mz, intensity) pairs; the return is a list of the same pairs.
     Intensity is passed through untouched - this filter removes peaks, it never rescales them.
     An empty result is possible and legitimate: every peak in that spectrum was impossible.
+
+    precursor_mz keeps the precursor whatever its verdict (issue #2): any peak within 20 mDa of
+    this m/z. Pass the precursor m/z you know from the library entry or the scan header; the
+    filter does not guess it from the peaks. Off by default.
     """
     _check_mode(mode)
     _check_deuterium(deuterium)
-    return [p for p in peaks if is_possible(p[0], mode, halogens, deuterium=deuterium)]
+    prec = None if precursor_mz is None else float(precursor_mz)
+    return [p for p in peaks
+            if (prec is not None and abs(p[0] - prec) <= PRECURSOR_TOL)
+            or is_possible(p[0], mode, halogens, deuterium=deuterium)]
 
 
 def fingerprint() -> str:
