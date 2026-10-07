@@ -199,14 +199,24 @@ check("warm lookup faster than cold", warm < cold, f"{warm:.1f} us/peak warm")
 # Each case uses ions calculated from formulas. The checks pin what the default filter does; the
 # expected failures state the behaviour each issue asks for, through the option it will add.
 
-# #5: masses above the 1,700 Da table ceiling are reported possible, but only after the solver
-# runs, which takes seconds per mass. One cold call keeps the cost of this case bounded.
+# #5: above the 1,700 Da table ceiling every mass is possible, and it is answered without the
+# solver, which takes seconds per mass that high. The answer is exact as long as each table's top
+# 16 Da is fully occupied: stepping up by CH2 (14.0157 Da) from a full window, which keeps a
+# composition valid, puts a valid composition within 1 mDa of any higher mass.
+for name, table in (("CHNOPS", imd.load_table()), ("halogen", imd.load_halogen_table())):
+    for mode in ("neg", "pos"):
+        top = table[mode][int((table["max_mz"] - 16) / table["bin"]):
+                          int(table["max_mz"] / table["bin"])]
+        check(f"{name} table full over its top 16 Da ({mode})", bool(top.all()))
 clear_cache()
-t0 = time.perf_counter()
-above = is_possible(1809.584839, "pos")
-ms = (time.perf_counter() - t0) * 1000
-check("1809.584839 pos above the table ceiling is reported possible", above)
-expect_failure("#5", "1809.584839 pos answered in under 10 ms", ms < 10, f"{ms:.0f} ms")
+for mz in (1809.584839, 2068.08):
+    for mode in ("neg", "pos"):
+        for halogens in (False, True):
+            t0 = time.perf_counter()
+            ok = is_possible(mz, mode, halogens=halogens)
+            ms = (time.perf_counter() - t0) * 1e3
+            check(f"{mz} {mode}{' halogens' if halogens else ''} above the ceiling: possible, "
+                  "under 10 ms", ok and ms < 10, f"{ms:.2f} ms")
 
 # #1: isotope-labelled internal standards. Deuterium is outside the alphabet, so the default
 # removes the precursor of a D9-TMAO standard and both of its deuterated trimethylammonium

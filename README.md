@@ -159,8 +159,11 @@ the same chemistry fingerprint as the CHNOPS table; the alphabet is recorded in 
 - It does not model isotopes. The alphabet uses the lightest isotope of each element, so the heavy
   isotope peaks of chlorine and bromine — ³⁷Cl at about a quarter of natural chlorine, ⁸¹Br at
   about half of natural bromine — are rejected even with `halogens=True`.
-- Above the table ceiling of 1700 Da every mass is reported possible. That is very nearly true
-  chemically, and nothing in LC-BinBase exceeds it, but do not read it as a verdict.
+- Above the table ceiling of 1700 Da every mass is reported possible, immediately and without the
+  solver. That is exact: every 1 mDa slot in the table's top 16 Da holds a valid composition, and
+  adding CH₂ to a valid composition keeps it valid, so every higher mass has one within 1 mDa. The
+  flip side is that the filter can remove nothing up there. Such peaks are rare in LC-BinBase but
+  do occur.
 
 ## Status
 
