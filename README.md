@@ -22,6 +22,9 @@ pip install -r requirements.txt
 python test_smoke.py          # exits non-zero on any failure
 ```
 
+The smoke test also carries one case for each failure class found in an audit on LC-BinBase data
+(issues #1 to #5). A class that is not fixed yet prints as XFAIL and does not fail the run.
+
 This is a drop-in directory, **not** a pip-installable distribution — there is no `pyproject.toml`
 and nothing to `pip install .`. Either run from inside the directory, or put it on the path:
 

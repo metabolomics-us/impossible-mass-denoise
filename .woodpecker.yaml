@@ -10,10 +10,8 @@
 # logs), so skip_clone + a plain git checkout, with the forge credential
 # staged by the agent at /etc/woodpecker-git-credentials.
 #
-# This is the standard harness: it proves the repo builds in CI and gives
-# every push a status. Replace the 'gate' step's commands with real checks
-# when the repo has them -- house pattern: a script under ops/ci/ that a
-# step calls, so a check changes in the same commit as the code it covers.
+# The gate calls the smoke suite through ops/ci/test_smoke.sh so its dependencies
+# and checks change in the same commit as the code they cover.
 when:
   - event: [push, pull_request, manual]
 
@@ -41,3 +39,4 @@ steps:
       - 'echo "repo: ${CI_REPO} @ ${CI_COMMIT_SHA} (branch ${CI_COMMIT_BRANCH:-main})"'
       - 'test -n "$(git ls-files)" || { echo "repo has no tracked files" >&2; exit 1; }'
       - 'echo "tracked files: $(git ls-files | wc -l)"'
+      - 'bash ops/ci/test_smoke.sh'
