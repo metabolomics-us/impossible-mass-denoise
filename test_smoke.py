@@ -234,14 +234,18 @@ LABELLED_PRECURSORS = [("D9-TMAO [M+H]+", "C3HD9NO", "pos", 9),
 check("default removes all three D9-TMAO ions", denoise_spectrum(TMAO_D9, "pos") == [])
 check("default removes the precursors of the five labelled standards in #1",
       not any(is_possible(ion_mz(f, mode), mode) for _, f, mode, _ in LABELLED_PRECURSORS))
-has_d = supports(denoise_spectrum, "deuterium") and supports(is_possible, "deuterium")
-expect_failure("#1", "deuterium=9 keeps the D9-TMAO ions and still removes noise",
-               has_d and denoise_spectrum(TMAO_D9 + [NOISE], "pos", deuterium=9) == TMAO_D9,
-               "" if has_d else "no deuterium option yet")
-expect_failure("#1", "deuterium= keeps the precursors of the five labelled standards",
-               has_d and all(is_possible(ion_mz(f, mode), mode, deuterium=n)
-                             for _, f, mode, n in LABELLED_PRECURSORS),
-               "" if has_d else "no deuterium option yet")
+check("deuterium=9 keeps the D9-TMAO ions and still removes noise",
+      denoise_spectrum(TMAO_D9 + [NOISE], "pos", deuterium=9) == TMAO_D9)
+check("deuterium= keeps the precursors of the five labelled standards",
+      all(is_possible(ion_mz(f, mode), mode, deuterium=n) for _, f, mode, n in LABELLED_PRECURSORS))
+check("deuterium=10 still removes a noise mass in both polarities",
+      not is_possible(NOISE[0], "pos", deuterium=10) and not is_possible(NOISE[0], "neg", deuterium=10))
+for bad in (-1, 1.5, True, "9"):
+    try:
+        denoise_spectrum(TMAO_D9, "pos", deuterium=bad)
+        check(f"rejects deuterium={bad!r}", False, "accepted silently")
+    except ValueError:
+        check(f"rejects deuterium={bad!r}", True)
 
 # #2 and #4: the precursor. Imatinib [M+2H]2+ is both the precursor and the base peak of its
 # spectrum. It is doubly charged, so no singly charged composition explains it. Callers know the
@@ -250,10 +254,14 @@ IMATINIB_2H = (ion_mz("C29H33N7O", "pos") - ELECTRON) / 2      # [M+2H]2+ of C29
 IMATINIB = [(ion_mz("C3H8N", "pos"), 90.0), (IMATINIB_2H, 100.0)]
 check("default removes the doubly charged imatinib precursor, the base peak",
       denoise_spectrum(IMATINIB, "pos") == IMATINIB[:1])
-has_prec = supports(denoise_spectrum, "precursor_mz")
-expect_failure("#2, #4", "precursor_mz= keeps the doubly charged precursor",
-               has_prec and denoise_spectrum(IMATINIB, "pos", precursor_mz=IMATINIB_2H) == IMATINIB,
-               "" if has_prec else "no precursor_mz option yet")
+check("precursor_mz= keeps the doubly charged precursor",
+      denoise_spectrum(IMATINIB, "pos", precursor_mz=IMATINIB_2H) == IMATINIB)
+NOISY = IMATINIB + [(80.1000, 40.0)]           # 80.1000 has no composition
+check("precursor_mz= keeps the precursor and nothing else",
+      denoise_spectrum(NOISY, "pos", precursor_mz=IMATINIB_2H) == IMATINIB)
+check("precursor_mz= matches the precursor peak within 20 mDa",
+      denoise_spectrum(NOISY, "pos", precursor_mz=IMATINIB_2H + 0.015) == IMATINIB
+      and denoise_spectrum(NOISY, "pos", precursor_mz=IMATINIB_2H + 0.025) == IMATINIB[:1])
 
 # #3: heavy halogen isotopes. The alphabet holds 35Cl and 79Br only, so with halogens on the light
 # peak of each pattern survives and its 37Cl or 81Br partners do not.

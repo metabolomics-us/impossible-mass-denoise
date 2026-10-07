@@ -6,9 +6,10 @@ composition could produce that exact mass at that polarity, and removes the peak
 Read "impossible" precisely: impossible **under the configured model**, which by default is
 C/H/N/O/P/S only, singly charged, monoisotopic, halogens and alkali metals off. A halogenated,
 alkali-adducted, deuterated or multiply charged fragment can be perfectly real and still be
-rejected. Halogens can be switched on — see [Halogens](#halogens). Multiply charged ions are
-the largest such class in our data. If your spectra are rich in any of those, measure the
-false-flag rate on your own reference set before deploying.
+rejected. Halogens can be switched on (see [Halogens](#halogens)), and so can deuterium labels
+for labelled internal standards (see [Use](#use)). Multiply charged ions are the largest such
+class in our data. If your spectra are rich in any of those, measure the false-flag rate on your
+own reference set before deploying.
 
 It needs nothing but the m/z and the polarity — no precursor formula, no adduct, no candidate
 structure. That is the point: it runs on unannotated bins, where formula-based denoisers cannot.
@@ -45,6 +46,8 @@ from denoise import denoise_spectrum
 
 kept = denoise_spectrum(peaks, mode="neg")                   # peaks = [(mz, intensity), ...]
 kept = denoise_spectrum(peaks, mode="neg", halogens=True)    # also allow Cl/F/Br/I
+kept = denoise_spectrum(peaks, mode="pos", deuterium=9)      # a D9-labelled internal standard
+kept = denoise_spectrum(peaks, mode="pos", precursor_mz=prec)   # never remove the precursor
 ```
 
 `mode` is `"neg"` or `"pos"`. The return is the surviving peaks, same tuples, same order.
@@ -56,9 +59,31 @@ the underlying module treats any string that is not exactly `"neg"` as positive,
 
 An empty result is legitimate and means every peak in that spectrum was impossible.
 
-Also available: `is_possible(mz, mode, halogens=False)` for a single peak, `fingerprint()` for the
-chemistry hash, `table_status()` and `halogen_table_status()` for whether each table loaded, and
-`cache_size()` / `clear_cache()` (see below).
+**Deuterium-labelled internal standards.** Deuterium is outside the alphabet, so the filter
+removes the deuterated ions of a labelled standard: often its precursor and base peak, sometimes
+every peak. Pass the standard's label count, for example `deuterium=9` for a D9 standard. A peak
+is then also kept when taking off between one and that many deuterium labels (1.0063 Da each)
+leaves a possible ion, so fragments that kept all, some or none of the labels survive, and a peak
+that no labelled composition explains is still removed. Take the count from the library entry or
+the standard's name, never from the peaks; in lipid names, sphingoid-base notation such as d18:1
+is not a label. Use the option only for that standard's spectra: each label adds a lookup and
+makes the filter a little more permissive. With `deuterium=9`, the share of masses between 50 and
+700 Da that the filter can reject falls from 35% to 31%, and a cold lookup takes about 9 µs
+instead of 5 to 6. ¹³C and ¹⁵N labels are not covered.
+
+**Keeping the precursor.** The filter judges every peak by its m/z alone, so it can remove the
+precursor itself: a doubly charged precursor has no singly charged composition, and a precursor
+measured more than 5 mDa off its true mass can miss every composition. `precursor_mz=` keeps any
+peak within 20 mDa of the precursor m/z you pass, from the library entry or the scan header; the
+filter does not guess it from the peaks. The window is wider than the filter's 5 mDa because a
+stored precursor m/z and the measured peak can differ by 10 mDa or more in uncalibrated spectra.
+It is off by default, costs one peak per spectrum and changes nothing else. A matcher that removes
+the precursor before scoring gets the same score with or without it; the option keeps the peak
+for anything else that reads it.
+
+Also available: `is_possible(mz, mode, halogens=False, *, deuterium=0)` for a single peak,
+`fingerprint()` for the chemistry hash, `table_status()` and `halogen_table_status()` for whether
+each table loaded, and `cache_size()` / `clear_cache()` (see below).
 
 ## Where it goes in the pipeline
 
