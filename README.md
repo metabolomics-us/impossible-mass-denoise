@@ -14,6 +14,9 @@ own reference set before deploying.
 It needs nothing but the m/z and the polarity — no precursor formula, no adduct, no candidate
 structure. That is the point: it runs on unannotated bins, where formula-based denoisers cannot.
 
+It removes noise on Orbitrap data. On TTOF data it has shown no measurable benefit; see
+[Which instruments it helps](#which-instruments-it-helps).
+
 ## Install
 
 Python 3.9+ and numpy. Nothing else. Verified on a clean virtualenv with Python 3.9.6 and numpy 2.0.2.
@@ -101,6 +104,25 @@ long-lived worker gets faster as fragment masses recur.
 Applying it to library spectra as well as query spectra raises the similarity scores slightly
 further in our tests — it does not improve which candidate ranks first — and it means re-processing
 the library. Query-side only is the simpler deployment.
+
+## Which instruments it helps
+
+The check behind this section used raw MS/MS scans from the lab's LC-BinBase methods. Each fragment
+ion was scored by how often it recurs across repeat scans of the same precursor, and the ions the
+filter removes were compared with the ions it keeps at the same relative intensity. Real fragments
+come back scan after scan; random noise does not.
+
+- On the Orbitrap methods, the removed ions recur far less often than the kept ones. The filter is
+  removing noise there.
+- On the TTOF HILIC methods, the removed ions recur as often as the kept ones, so the filter
+  showed no measurable benefit there. Measure it on your own data before using it on TTOF.
+- The one QTOF method with raw files showed only a small difference, and ions recurred rarely
+  whether removed or kept. Treat QTOF as unvalidated.
+- Below 1% of the base peak, removed and kept ions recur equally often on every instrument.
+
+Why TTOF differs has not been tested. Lower fragment mass accuracy is the obvious candidate, since
+the filter assumes masses within 5 mDa of exact. Recurring across scans is also not proof that an
+ion is real, because an artifact at a fixed m/z recurs too; the Orbitrap result holds either way.
 
 ## Performance
 
@@ -193,9 +215,8 @@ wants to measure it on their own data.
 
 - It does not decide whether an annotation is correct. It removes peaks; everything downstream is
   unchanged.
-- It cannot help a spectrum whose peaks are all chemically plausible. On our TTOF methods it finds
-  nothing to remove in over half of spectra, because at lower mass accuracy more masses have a
-  valid composition.
+- It cannot help a spectrum whose peaks are all chemically plausible. On TTOF data it often finds
+  nothing to remove; see [Which instruments it helps](#which-instruments-it-helps).
 - It saturates at high mass. At the default 5 mDa tolerance it can reject almost nothing above
   about 550 Da, and nothing at all above about 670 Da, where every 1 mDa slot holds a valid
   composition.
@@ -220,11 +241,10 @@ wants to measure it on their own data.
 The filter is validated across the six LC-BinBase acquisition methods; the measurements live in the
 lab's internal findings document rather than here.
 
-Two limits matter operationally. The benefit is concentrated on high-mass-accuracy data — at lower
-mass accuracy more masses have a valid composition, so there is less to flag. And denoising raises
-the similarity of the correct match and of its competitors alike, so treat it as a score
-improvement rather than a ranking improvement: it will not by itself change which candidate ranks
-first.
+Two limits matter operationally. The benefit is concentrated on Orbitrap data; see
+[Which instruments it helps](#which-instruments-it-helps). And denoising raises the similarity of
+the correct match and of its competitors alike, so treat it as a score improvement rather than a
+ranking improvement: it will not by itself change which candidate ranks first.
 
 ## Provenance
 
