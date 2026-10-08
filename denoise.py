@@ -11,11 +11,12 @@ and the removal of a command-line demo that read internal data files.
 from __future__ import annotations
 
 import bisect
+import re
 from numbers import Integral
 
 import impossible_mass_denoise as _imd
 
-__all__ = ["denoise_spectrum", "is_possible", "fingerprint", "table_status",
+__all__ = ["denoise_spectrum", "is_possible", "count_deuterium", "fingerprint", "table_status",
            "halogen_table_status", "clear_cache", "cache_size"]
 
 _MODES = ("neg", "pos")
@@ -27,6 +28,17 @@ PRECURSOR_TOL = 0.020
 # 37Cl - 35Cl and 81Br - 79Br (issue #3), matched within the filter's 5 mDa
 HEAVY_HALOGEN_SPACING = (36.96590260 - 34.96885268, 80.91628970 - 78.91833710)
 ISOTOPE_TOL = 0.005
+_DEUTERIUM_LABEL = re.compile(r"(?<![A-Za-z0-9])[dD](\d+)(?![\d:])")
+
+
+def count_deuterium(name: str) -> int:
+    """Return the largest D-label count in a compound name, or zero if none is listed.
+
+    A token such as ``d7`` denotes seven deuteriums. Sphingoid-base notation such as
+    ``d18:1`` denotes a chain and is deliberately ignored. This parses the library name,
+    not a spectrum; only use the result for a known labelled standard.
+    """
+    return max((int(token) for token in _DEUTERIUM_LABEL.findall(name)), default=0)
 
 
 def _check_mode(mode):
