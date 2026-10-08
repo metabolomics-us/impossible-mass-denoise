@@ -28,6 +28,9 @@ python test_smoke.py          # exits non-zero on any failure
 
 The smoke test also carries one case for each failure class found in an audit on LC-BinBase data
 (issues #1 to #5). A class that is not fixed yet prints as XFAIL and does not fail the run.
+CI also runs `test_audit_controls.py`: a pinned default-result check on 256 public MassBank spectra,
+a fake-deuterium negative control, and generated CHNOPS and impossible-mass cases. See
+[`tests/README.md`](tests/README.md) for fixture attribution.
 
 This is a drop-in directory, **not** a pip-installable distribution — there is no `pyproject.toml`
 and nothing to `pip install .`. Either run from inside the directory, or put it on the path:
