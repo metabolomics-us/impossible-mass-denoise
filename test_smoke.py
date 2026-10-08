@@ -271,6 +271,26 @@ check("precursor_mz= matches the precursor peak within 20 mDa",
       denoise_spectrum(NOISY, "pos", precursor_mz=IMATINIB_2H + 0.015) == IMATINIB
       and denoise_spectrum(NOISY, "pos", precursor_mz=IMATINIB_2H + 0.025) == IMATINIB[:1])
 
+# #17: an opt-in base-peak guard protects intensity rather than claiming the mass is possible.
+TOP_PEAKS = [(59.0138, 80.0), (120.1400, 90.0), (80.1000, 100.0)]
+check("default still removes impossible top peaks",
+      denoise_spectrum(TOP_PEAKS, "neg") == TOP_PEAKS[:1])
+check("keep_top=1 protects the impossible base peak",
+      denoise_spectrum(TOP_PEAKS, "neg", keep_top=1) == [TOP_PEAKS[0], TOP_PEAKS[2]])
+check("keep_top=2 protects the two most intense peaks without reordering",
+      denoise_spectrum(TOP_PEAKS, "neg", keep_top=2) == TOP_PEAKS)
+check("keep_top works with a generator and precursor_mz independently",
+      denoise_spectrum(iter(TOP_PEAKS), "neg", keep_top=1, precursor_mz=120.1400) == TOP_PEAKS)
+TIED_PEAKS = [(80.1000, 100.0), (120.1400, 100.0)]
+check("keep_top breaks intensity ties by input order",
+      denoise_spectrum(TIED_PEAKS, "neg", keep_top=1) == TIED_PEAKS[:1])
+for bad in (-1, 1.5, True, "1"):
+    try:
+        denoise_spectrum(TOP_PEAKS, "neg", keep_top=bad)
+        check(f"rejects keep_top={bad!r}", False, "accepted silently")
+    except ValueError:
+        check(f"rejects keep_top={bad!r}", True)
+
 # #3: heavy halogen isotopes. The alphabet holds 35Cl and 79Br only, so on its own a 37Cl or 81Br
 # peak has no composition. With halogens on, a heavy peak is kept when its light partner is kept,
 # and the rule chains: in CCl3- neither heavy peak has a composition of its own, so M+4 is kept

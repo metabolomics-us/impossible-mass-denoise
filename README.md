@@ -51,6 +51,7 @@ kept = denoise_spectrum(peaks, mode="neg")                   # peaks = [(mz, int
 kept = denoise_spectrum(peaks, mode="neg", halogens=True)    # also allow Cl/F/Br/I
 kept = denoise_spectrum(peaks, mode="pos", deuterium=9)      # a D9-labelled internal standard
 kept = denoise_spectrum(peaks, mode="pos", precursor_mz=prec)   # never remove the precursor
+kept = denoise_spectrum(peaks, mode="neg", keep_top=1)       # protect the base peak
 ```
 
 `mode` is `"neg"` or `"pos"`. The return is the surviving peaks, same tuples, same order.
@@ -83,6 +84,13 @@ stored precursor m/z and the measured peak can differ by 10 mDa or more in uncal
 It is off by default, costs one peak per spectrum and changes nothing else. A matcher that removes
 the precursor before scoring gets the same score with or without it; the option keeps the peak
 for anything else that reads it.
+
+**Protecting intense peaks.** `keep_top=k` keeps the `k` most intense input peaks regardless of
+their mass verdict (`keep_top=1` protects the base peak). It is off by default, and ties are
+resolved by input order. Use it when preserving match stability matters more than removing every
+peak unexplained by CHNOPS. A protected peak may truly be noise: if its mass is impossible under
+the model, this guard deliberately keeps it. Assess both correct and incorrect library matches
+on your own data before using the option in a matching pipeline.
 
 Also available: `is_possible(mz, mode, halogens=False, *, deuterium=0)` for a single peak,
 `fingerprint()` for the chemistry hash, `table_status()` and `halogen_table_status()` for whether
