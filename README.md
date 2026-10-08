@@ -74,6 +74,11 @@ makes the filter a little more permissive. With `deuterium=9`, the share of mass
 700 Da that the filter can reject falls from 35% to 31%, and a cold lookup takes about 9 µs
 instead of 5 to 6. ¹³C and ¹⁵N labels are not covered.
 
+`count_deuterium(name)` extracts the largest D-label token from a known standard's library name,
+or returns 0 if none is present. For example, `count_deuterium("1_D9-Choline iSTD")` is 9 and
+`count_deuterium("1_Sphingosine d17:1 iSTD")` is 0. Check the name before passing its count to
+`denoise_spectrum`; the helper does not establish that a spectrum belongs to that standard.
+
 **Keeping the precursor.** The filter judges every peak by its m/z alone, so it can remove the
 precursor itself: a doubly charged precursor has no singly charged composition, and a precursor
 measured more than 5 mDa off its true mass can miss every composition. `precursor_mz=` keeps any
