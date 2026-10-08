@@ -20,6 +20,7 @@ import re
 import subprocess
 import sys
 import time
+import numpy as np
 
 from denoise import (denoise_spectrum, is_possible, fingerprint, table_status,
                      halogen_table_status, cache_size, clear_cache)
@@ -199,14 +200,24 @@ check("warm lookup faster than cold", warm < cold, f"{warm:.1f} us/peak warm")
 # Each case uses ions calculated from formulas. The checks pin what the default filter does; the
 # expected failures state the behaviour each issue asks for, through the option it will add.
 
-# #5: masses above the 1,700 Da table ceiling are reported possible, but only after the solver
-# runs, which takes seconds per mass. One cold call keeps the cost of this case bounded.
+# #5: above the 1,700 Da table ceiling every mass is possible, and it is answered without the
+# solver, which takes seconds per mass that high. The answer is exact as long as each table's top
+# 16 Da is fully occupied: stepping up by CH2 (14.0157 Da) from a full window, which keeps a
+# composition valid, puts a valid composition within 1 mDa of any higher mass.
+for name, table in (("CHNOPS", imd.load_table()), ("halogen", imd.load_halogen_table())):
+    for mode in ("neg", "pos"):
+        top = table[mode][int((table["max_mz"] - 16) / table["bin"]):
+                          int(table["max_mz"] / table["bin"])]
+        check(f"{name} table full over its top 16 Da ({mode})", bool(top.all()))
 clear_cache()
-t0 = time.perf_counter()
-above = is_possible(1809.584839, "pos")
-ms = (time.perf_counter() - t0) * 1000
-check("1809.584839 pos above the table ceiling is reported possible", above)
-expect_failure("#5", "1809.584839 pos answered in under 10 ms", ms < 10, f"{ms:.0f} ms")
+for mz in (1809.584839, 2068.08):
+    for mode in ("neg", "pos"):
+        for halogens in (False, True):
+            t0 = time.perf_counter()
+            ok = is_possible(mz, mode, halogens=halogens)
+            ms = (time.perf_counter() - t0) * 1e3
+            check(f"{mz} {mode}{' halogens' if halogens else ''} above the ceiling: possible, "
+                  "under 10 ms", ok and ms < 10, f"{ms:.2f} ms")
 
 # #1: isotope-labelled internal standards. Deuterium is outside the alphabet, so the default
 # removes the precursor of a D9-TMAO standard and both of its deuterated trimethylammonium
@@ -224,15 +235,26 @@ LABELLED_PRECURSORS = [("D9-TMAO [M+H]+", "C3HD9NO", "pos", 9),
 check("default removes all three D9-TMAO ions", denoise_spectrum(TMAO_D9, "pos") == [])
 check("default removes the precursors of the five labelled standards in #1",
       not any(is_possible(ion_mz(f, mode), mode) for _, f, mode, _ in LABELLED_PRECURSORS))
-has_d = supports(denoise_spectrum, "deuterium") and supports(is_possible, "deuterium")
-expect_failure("#1", "deuterium=9 keeps the D9-TMAO ions and still removes noise",
-               has_d and denoise_spectrum(TMAO_D9 + [NOISE], "pos", deuterium=9) == TMAO_D9,
-               "" if has_d else "no deuterium option yet")
-expect_failure("#1", "deuterium= keeps the precursors of the five labelled standards",
-               has_d and all(is_possible(ion_mz(f, mode), mode, deuterium=n)
-                             for _, f, mode, n in LABELLED_PRECURSORS),
-               "" if has_d else "no deuterium option yet")
+check("deuterium=9 keeps the D9-TMAO ions and still removes noise",
+      denoise_spectrum(TMAO_D9 + [NOISE], "pos", deuterium=9) == TMAO_D9)
+check("deuterium= keeps the precursors of the five labelled standards",
+      all(is_possible(ion_mz(f, mode), mode, deuterium=n) for _, f, mode, n in LABELLED_PRECURSORS))
+check("deuterium=10 still removes a noise mass in both polarities",
+      not is_possible(NOISE[0], "pos", deuterium=10) and not is_possible(NOISE[0], "neg", deuterium=10))
+for bad in (-1, 1.5, True, "9"):
+    try:
+        denoise_spectrum(TMAO_D9, "pos", deuterium=bad)
+        check(f"rejects deuterium={bad!r}", False, "accepted silently")
+    except ValueError:
+        check(f"rejects deuterium={bad!r}", True)
 
+for count in (5, np.int32(5), np.int64(5)):
+    check(f"accepts deuterium={type(count).__name__}",
+          denoise_spectrum(TMAO_D9, "pos", deuterium=count)
+          == denoise_spectrum(TMAO_D9, "pos", deuterium=5))
+    check(f"is_possible accepts deuterium={type(count).__name__}",
+          is_possible(TMAO_D9[0][0], "pos", deuterium=count)
+          == is_possible(TMAO_D9[0][0], "pos", deuterium=5))
 # #2 and #4: the precursor. Imatinib [M+2H]2+ is both the precursor and the base peak of its
 # spectrum. It is doubly charged, so no singly charged composition explains it. Callers know the
 # precursor m/z from the library entry; the filter should not have to guess it.
@@ -240,13 +262,29 @@ IMATINIB_2H = (ion_mz("C29H33N7O", "pos") - ELECTRON) / 2      # [M+2H]2+ of C29
 IMATINIB = [(ion_mz("C3H8N", "pos"), 90.0), (IMATINIB_2H, 100.0)]
 check("default removes the doubly charged imatinib precursor, the base peak",
       denoise_spectrum(IMATINIB, "pos") == IMATINIB[:1])
-has_prec = supports(denoise_spectrum, "precursor_mz")
-expect_failure("#2, #4", "precursor_mz= keeps the doubly charged precursor",
-               has_prec and denoise_spectrum(IMATINIB, "pos", precursor_mz=IMATINIB_2H) == IMATINIB,
-               "" if has_prec else "no precursor_mz option yet")
+check("precursor_mz= keeps the doubly charged precursor",
+      denoise_spectrum(IMATINIB, "pos", precursor_mz=IMATINIB_2H) == IMATINIB)
+check("precursor_mz accepts numpy float64",
+      denoise_spectrum(IMATINIB, "pos", precursor_mz=np.float64(IMATINIB_2H)) == IMATINIB)
+NOISY = IMATINIB + [(80.1000, 40.0)]           # 80.1000 has no composition
+# negative mode: ATP [M-2H]2- has no singly charged composition either
+ATP_2H = (ion_mz("C10H14N5O13P3", "neg") + ELECTRON) / 2       # [M-2H]2- of C10H16N5O13P3
+check("default removes the doubly charged ATP precursor", not is_possible(ATP_2H, "neg"))
+check("precursor_mz= keeps a [M-2H]2- precursor",
+      denoise_spectrum([(ion_mz("O3P", "neg"), 60.0), (ATP_2H, 100.0)], "neg",
+                       precursor_mz=ATP_2H) == [(ion_mz("O3P", "neg"), 60.0), (ATP_2H, 100.0)])
+# no per-peak 2+ rule: the default still treats every peak as singly charged
+check("is_possible still rejects the doubly charged imatinib ion", not is_possible(IMATINIB_2H, "pos"))
+check("precursor_mz= keeps the precursor and nothing else",
+      denoise_spectrum(NOISY, "pos", precursor_mz=IMATINIB_2H) == IMATINIB)
+check("precursor_mz= matches the precursor peak within 20 mDa",
+      denoise_spectrum(NOISY, "pos", precursor_mz=IMATINIB_2H + 0.015) == IMATINIB
+      and denoise_spectrum(NOISY, "pos", precursor_mz=IMATINIB_2H + 0.025) == IMATINIB[:1])
 
-# #3: heavy halogen isotopes. The alphabet holds 35Cl and 79Br only, so with halogens on the light
-# peak of each pattern survives and its 37Cl or 81Br partners do not.
+# #3: heavy halogen isotopes. The alphabet holds 35Cl and 79Br only, so on its own a 37Cl or 81Br
+# peak has no composition. With halogens on, a heavy peak is kept when its light partner is kept,
+# and the rule chains: in CCl3- neither heavy peak has a composition of its own, so M+4 is kept
+# only through the M+2 kept before it.
 CL_SHIFT = 36.965902602 - ATOM["Cl"]          # 37Cl - 35Cl
 BR_SHIFT = 80.9162897 - ATOM["Br"]            # 81Br - 79Br
 bromide, chloride, ccl3 = ion_mz("Br", "neg"), ion_mz("Cl", "neg"), ion_mz("CCl3", "neg")
@@ -257,9 +295,14 @@ HALOGEN_PATTERNS = [
 ]
 for name, pattern in HALOGEN_PATTERNS:
     kept = denoise_spectrum(pattern, "neg", halogens=True)
-    check(f"halogens=True keeps the light peak of {name}", pattern[0] in kept)
-    expect_failure("#3", f"halogens=True keeps every isotope peak of {name}", kept == pattern,
-                   f"kept {len(kept)} of {len(pattern)}")
+    check(f"halogens=True keeps every isotope peak of {name}", kept == pattern,
+          f"kept {len(kept)} of {len(pattern)}")
+    check(f"default removes every peak of {name}", denoise_spectrum(pattern, "neg") == [])
+br_pair = HALOGEN_PATTERNS[0][1]
+check("isotope partners work on unsorted input and keep the input order",
+      denoise_spectrum(br_pair[::-1], "neg", halogens=True) == br_pair[::-1])
+check("81Br- without its light partner is still removed with halogens",
+      denoise_spectrum([(59.0138, 100.0), br_pair[1]], "neg", halogens=True) == [(59.0138, 100.0)])
 
 print(f"\n{len(fails)} failure(s), {len(xfails)} expected failure(s)" if fails
       else f"\nall checks passed, {len(xfails)} expected failure(s)")

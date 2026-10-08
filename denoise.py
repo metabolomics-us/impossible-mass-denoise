@@ -10,12 +10,23 @@ and the removal of a command-line demo that read internal data files.
 """
 from __future__ import annotations
 
+import bisect
+from numbers import Integral
+
 import impossible_mass_denoise as _imd
 
 __all__ = ["denoise_spectrum", "is_possible", "fingerprint", "table_status",
            "halogen_table_status", "clear_cache", "cache_size"]
 
 _MODES = ("neg", "pos")
+D_SHIFT = 2.01410177812 - 1.00782503223   # mass a deuterium label adds over hydrogen (issue #1)
+# A peak within 20 mDa of precursor_mz counts as the precursor (issue #2). Wider than the filter's
+# 5 mDa because a stored precursor m/z and the measured peak can differ by 10 mDa or more in
+# uncalibrated spectra.
+PRECURSOR_TOL = 0.020
+# 37Cl - 35Cl and 81Br - 79Br (issue #3), matched within the filter's 5 mDa
+HEAVY_HALOGEN_SPACING = (36.96590260 - 34.96885268, 80.91628970 - 78.91833710)
+ISOTOPE_TOL = 0.005
 
 
 def _check_mode(mode):
@@ -26,31 +37,79 @@ def _check_mode(mode):
         raise ValueError(f"mode must be one of {_MODES}, got {mode!r}")
 
 
-def is_possible(mz: float, mode: str = "neg", halogens: bool = False) -> bool:
+def _check_deuterium(deuterium):
+    if isinstance(deuterium, bool) or not isinstance(deuterium, Integral) or deuterium < 0:
+        raise ValueError(f"deuterium must be a non-negative int, got {deuterium!r}")
+    return int(deuterium)
+
+
+def is_possible(mz: float, mode: str = "neg", halogens: bool = False, *,
+                deuterium: int = 0) -> bool:
     """True when some composition in the alphabet could produce this ion m/z in this polarity.
 
     mode is "neg" or "pos". The alphabet is C/H/N/O/P/S, plus Cl/F/Br/I when halogens=True.
     False means no chemically legal composition exists within tolerance - impossible under THAT
     alphabet, singly charged, monoisotopic. It does not prove the peak is not a real ion.
+
+    deuterium=n is for deuterium-labelled internal standards (issue #1). The peak is also
+    accepted when taking off between 1 and n deuterium labels (1.0063 Da each) leaves a possible
+    ion, so fragments that kept all, some or none of the labels survive. n is the standard's
+    label count, 9 for a D9 standard.
     """
     _check_mode(mode)
-    return bool(_imd.possible(float(mz), mode=mode, d_max=0, union=True,
-                              use_halogens=bool(halogens))[0])
+    deuterium = _check_deuterium(deuterium)
+    mz = float(mz)
+    return any(_imd.possible(mz - k * D_SHIFT, mode=mode, d_max=0, union=True,
+                             use_halogens=bool(halogens))[0]
+               for k in range(deuterium + 1) if mz - k * D_SHIFT > 0)
 
 
-def denoise_spectrum(peaks, mode: str = "neg", halogens: bool = False):
+def _near(sorted_mz, target):
+    """Is any value of the sorted list within ISOTOPE_TOL of target?"""
+    i = bisect.bisect_left(sorted_mz, target - ISOTOPE_TOL)
+    return i < len(sorted_mz) and sorted_mz[i] <= target + ISOTOPE_TOL
+
+
+def denoise_spectrum(peaks, mode: str = "neg", halogens: bool = False, *, deuterium: int = 0,
+                     precursor_mz: float | None = None):
     """Return the peaks that survive the filter, in the order given.
 
     halogens=False (the default) is the validated configuration. halogens=True keeps fragments
     that need Cl/F/Br/I to explain them - bromide and chloride ions, for example - at the cost of
-    rejecting fewer noise peaks overall; see the README before switching it on.
+    rejecting fewer noise peaks overall; see the README before switching it on. With halogens on,
+    a 37Cl or 81Br isotope peak is also kept when its light partner, 1.997 or 1.998 Da below, is
+    in the spectrum and kept (issue #3); a heavy-isotope peak without a kept partner is removed.
+
+    deuterium=n keeps the deuterated ions of a deuterium-labelled internal standard, as described
+    in is_possible (issue #1). Pass the standard's label count from the library entry or its name;
+    the filter does not infer it from the peaks. Each label adds a lookup and makes the filter a
+    little more permissive, so use it only for that standard's spectra.
 
     peaks is any iterable of (mz, intensity) pairs; the return is a list of the same pairs.
     Intensity is passed through untouched - this filter removes peaks, it never rescales them.
     An empty result is possible and legitimate: every peak in that spectrum was impossible.
+
+    precursor_mz keeps the precursor whatever its verdict (issue #2): any peak within 20 mDa of
+    this m/z. Pass the precursor m/z you know from the library entry or the scan header; the
+    filter does not guess it from the peaks. Off by default.
     """
     _check_mode(mode)
-    return [p for p in peaks if is_possible(p[0], mode, halogens)]
+    deuterium = _check_deuterium(deuterium)
+    peaks = list(peaks)
+    prec = None if precursor_mz is None else float(precursor_mz)
+    keep = [(prec is not None and abs(p[0] - prec) <= PRECURSOR_TOL)
+            or is_possible(p[0], mode, halogens, deuterium=deuterium) for p in peaks]
+    if halogens:
+        # Walk up in m/z so a heavy-isotope peak can lean on a partner kept just before it, and a
+        # chain such as two chlorines (M, M+2, M+4) carries through.
+        kept_mz = []
+        for i in sorted(range(len(peaks)), key=lambda j: peaks[j][0]):
+            mz = peaks[i][0]
+            if not keep[i] and any(_near(kept_mz, mz - d) for d in HEAVY_HALOGEN_SPACING):
+                keep[i] = True
+            if keep[i]:
+                bisect.insort(kept_mz, mz)
+    return [p for p, k in zip(peaks, keep) if k]
 
 
 def fingerprint() -> str:
