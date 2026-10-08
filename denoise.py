@@ -11,6 +11,7 @@ and the removal of a command-line demo that read internal data files.
 from __future__ import annotations
 
 import bisect
+import operator
 from numbers import Integral
 
 import impossible_mass_denoise as _imd
@@ -43,6 +44,18 @@ def _check_deuterium(deuterium):
     return int(deuterium)
 
 
+def _check_keep_top(keep_top):
+    if isinstance(keep_top, bool):
+        raise ValueError(f"keep_top must be a non-negative integer, got {keep_top!r}")
+    try:
+        count = operator.index(keep_top)
+    except TypeError as exc:
+        raise ValueError(f"keep_top must be a non-negative integer, got {keep_top!r}") from exc
+    if count < 0:
+        raise ValueError(f"keep_top must be a non-negative integer, got {keep_top!r}")
+    return count
+
+
 def is_possible(mz: float, mode: str = "neg", halogens: bool = False, *,
                 deuterium: int = 0) -> bool:
     """True when some composition in the alphabet could produce this ion m/z in this polarity.
@@ -71,7 +84,7 @@ def _near(sorted_mz, target):
 
 
 def denoise_spectrum(peaks, mode: str = "neg", halogens: bool = False, *, deuterium: int = 0,
-                     precursor_mz: float | None = None):
+                     precursor_mz: float | None = None, keep_top: int = 0):
     """Return the peaks that survive the filter, in the order given.
 
     halogens=False (the default) is the validated configuration. halogens=True keeps fragments
@@ -92,13 +105,21 @@ def denoise_spectrum(peaks, mode: str = "neg", halogens: bool = False, *, deuter
     precursor_mz keeps the precursor whatever its verdict (issue #2): any peak within 20 mDa of
     this m/z. Pass the precursor m/z you know from the library entry or the scan header; the
     filter does not guess it from the peaks. Off by default.
+
+    keep_top=k protects the k most intense input peaks, even if their masses have no composition
+    under the model (issue #17). Ties are resolved by input order. Off by default.
     """
     _check_mode(mode)
     deuterium = _check_deuterium(deuterium)
+    keep_top = _check_keep_top(keep_top)
     peaks = list(peaks)
     prec = None if precursor_mz is None else float(precursor_mz)
-    keep = [(prec is not None and abs(p[0] - prec) <= PRECURSOR_TOL)
-            or is_possible(p[0], mode, halogens, deuterium=deuterium) for p in peaks]
+    protected = (set(sorted(range(len(peaks)), key=lambda i: (-peaks[i][1], i))[:keep_top])
+                 if keep_top else set())
+    keep = [(i in protected)
+            or (prec is not None and abs(p[0] - prec) <= PRECURSOR_TOL)
+            or is_possible(p[0], mode, halogens, deuterium=deuterium)
+            for i, p in enumerate(peaks)]
     if halogens:
         # Walk up in m/z so a heavy-isotope peak can lean on a partner kept just before it, and a
         # chain such as two chlorines (M, M+2, M+4) carries through.

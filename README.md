@@ -28,6 +28,9 @@ python test_smoke.py          # exits non-zero on any failure
 
 The smoke test also carries one case for each failure class found in an audit on LC-BinBase data
 (issues #1 to #5). A class that is not fixed yet prints as XFAIL and does not fail the run.
+CI also runs `test_audit_controls.py`: a pinned default-result check on 256 public MassBank spectra,
+a fake-deuterium negative control, and generated CHNOPS and impossible-mass cases. See
+[`tests/README.md`](tests/README.md) for fixture attribution.
 
 This is a drop-in directory, **not** a pip-installable distribution — there is no `pyproject.toml`
 and nothing to `pip install .`. Either run from inside the directory, or put it on the path:
@@ -51,6 +54,7 @@ kept = denoise_spectrum(peaks, mode="neg")                   # peaks = [(mz, int
 kept = denoise_spectrum(peaks, mode="neg", halogens=True)    # also allow Cl/F/Br/I
 kept = denoise_spectrum(peaks, mode="pos", deuterium=9)      # a D9-labelled internal standard
 kept = denoise_spectrum(peaks, mode="pos", precursor_mz=prec)   # never remove the precursor
+kept = denoise_spectrum(peaks, mode="neg", keep_top=1)       # protect the base peak
 ```
 
 `mode` is `"neg"` or `"pos"`. The return is the surviving peaks, same tuples, same order.
@@ -73,6 +77,9 @@ is not a label. Use the option only for that standard's spectra: each label adds
 makes the filter a little more permissive. With `deuterium=9`, the share of masses between 50 and
 700 Da that the filter can reject falls from 35% to 31%, and a cold lookup takes about 9 µs
 instead of 5 to 6. ¹³C and ¹⁵N labels are not covered.
+For lipid standards with d5 to d9 labels on larger ions, trying every allowed label shift can
+make most peaks pass. Check that the option still removes noise on your lipid method before using
+it there; the benefit seen for small polar standards does not carry over automatically.
 
 **Keeping the precursor.** The filter judges every peak by its m/z alone, so it can remove the
 precursor itself: a doubly charged precursor has no singly charged composition, and a precursor
@@ -83,6 +90,13 @@ stored precursor m/z and the measured peak can differ by 10 mDa or more in uncal
 It is off by default, costs one peak per spectrum and changes nothing else. A matcher that removes
 the precursor before scoring gets the same score with or without it; the option keeps the peak
 for anything else that reads it.
+
+**Protecting intense peaks.** `keep_top=k` keeps the `k` most intense input peaks regardless of
+their mass verdict (`keep_top=1` protects the base peak). It is off by default, and ties are
+resolved by input order. Use it when preserving match stability matters more than removing every
+peak unexplained by CHNOPS. A protected peak may truly be noise: if its mass is impossible under
+the model, this guard deliberately keeps it. Assess both correct and incorrect library matches
+on your own data before using the option in a matching pipeline.
 
 Also available: `is_possible(mz, mode, halogens=False, *, deuterium=0)` for a single peak,
 `fingerprint()` for the chemistry hash, `table_status()` and `halogen_table_status()` for whether
@@ -101,9 +115,12 @@ It is a pure function of the peak list. It has no state, no I/O after the table 
 calls, and is thread-safe for reads. The module memoises results in a process-local dict, so a
 long-lived worker gets faster as fragment masses recur.
 
-Applying it to library spectra as well as query spectra raises the similarity scores slightly
-further in our tests — it does not improve which candidate ranks first — and it means re-processing
-the library. Query-side only is the simpler deployment.
+For library matching, evaluate denoising both the query and the library spectrum with the same
+settings and ordering of the intensity floor. In the larger audit this retained more previously
+passing identified-compound matches than filtering the query alone. It also means re-processing
+the library and can change which matches cross a score threshold. Check incorrect matches and
+recalibrate that threshold before deployment; a higher similarity score alone is not evidence of
+a better identification.
 
 ## Which instruments it helps
 
@@ -118,7 +135,9 @@ come back scan after scan; random noise does not.
   showed no measurable benefit there. Measure it on your own data before using it on TTOF.
 - The one QTOF method with raw files showed only a small difference, and ions recurred rarely
   whether removed or kept. Treat QTOF as unvalidated.
-- Below 1% of the base peak, removed and kept ions recur equally often on every instrument.
+- Below 1% of the base peak, the difference still depends on the instrument. Removed Orbitrap
+  ions recur much less often than kept ions at the same intensity; TTOF shows no measurable gap,
+  while the QTOF difference is small.
 
 Why TTOF differs has not been tested. Lower fragment mass accuracy is the obvious candidate, since
 the filter assumes masses within 5 mDa of exact. Recurring across scans is also not proof that an
@@ -238,7 +257,7 @@ wants to measure it on their own data.
 
 ## Status
 
-The filter is validated across the six LC-BinBase acquisition methods; the measurements live in the
+The filter has been checked across LC-BinBase acquisition methods; the measurements live in the
 lab's internal findings document rather than here.
 
 Two limits matter operationally. The benefit is concentrated on Orbitrap data; see
