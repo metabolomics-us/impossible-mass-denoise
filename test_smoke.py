@@ -20,6 +20,7 @@ import re
 import subprocess
 import sys
 import time
+import numpy as np
 
 from denoise import (denoise_spectrum, is_possible, count_deuterium, fingerprint, table_status,
                      halogen_table_status, cache_size, clear_cache)
@@ -261,6 +262,14 @@ LABEL_NAMES = {
 for name, expected in LABEL_NAMES.items():
     check(f"counts D labels in {name!r}", count_deuterium(name) == expected)
 
+for count in (5, np.int32(5), np.int64(5)):
+    check(f"accepts deuterium={type(count).__name__}",
+          denoise_spectrum(TMAO_D9, "pos", deuterium=count)
+          == denoise_spectrum(TMAO_D9, "pos", deuterium=5))
+    check(f"is_possible accepts deuterium={type(count).__name__}",
+          is_possible(TMAO_D9[0][0], "pos", deuterium=count)
+          == is_possible(TMAO_D9[0][0], "pos", deuterium=5))
+
 # #2 and #4: the precursor. Imatinib [M+2H]2+ is both the precursor and the base peak of its
 # spectrum. It is doubly charged, so no singly charged composition explains it. Callers know the
 # precursor m/z from the library entry; the filter should not have to guess it.
@@ -270,6 +279,8 @@ check("default removes the doubly charged imatinib precursor, the base peak",
       denoise_spectrum(IMATINIB, "pos") == IMATINIB[:1])
 check("precursor_mz= keeps the doubly charged precursor",
       denoise_spectrum(IMATINIB, "pos", precursor_mz=IMATINIB_2H) == IMATINIB)
+check("precursor_mz accepts numpy float64",
+      denoise_spectrum(IMATINIB, "pos", precursor_mz=np.float64(IMATINIB_2H)) == IMATINIB)
 NOISY = IMATINIB + [(80.1000, 40.0)]           # 80.1000 has no composition
 # negative mode: ATP [M-2H]2- has no singly charged composition either
 ATP_2H = (ion_mz("C10H14N5O13P3", "neg") + ELECTRON) / 2       # [M-2H]2- of C10H16N5O13P3

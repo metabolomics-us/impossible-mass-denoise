@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import bisect
 import re
+from numbers import Integral
 
 import impossible_mass_denoise as _imd
 
@@ -49,8 +50,9 @@ def _check_mode(mode):
 
 
 def _check_deuterium(deuterium):
-    if isinstance(deuterium, bool) or not isinstance(deuterium, int) or deuterium < 0:
+    if isinstance(deuterium, bool) or not isinstance(deuterium, Integral) or deuterium < 0:
         raise ValueError(f"deuterium must be a non-negative int, got {deuterium!r}")
+    return int(deuterium)
 
 
 def is_possible(mz: float, mode: str = "neg", halogens: bool = False, *,
@@ -67,7 +69,7 @@ def is_possible(mz: float, mode: str = "neg", halogens: bool = False, *,
     label count, 9 for a D9 standard.
     """
     _check_mode(mode)
-    _check_deuterium(deuterium)
+    deuterium = _check_deuterium(deuterium)
     mz = float(mz)
     return any(_imd.possible(mz - k * D_SHIFT, mode=mode, d_max=0, union=True,
                              use_halogens=bool(halogens))[0]
@@ -104,7 +106,7 @@ def denoise_spectrum(peaks, mode: str = "neg", halogens: bool = False, *, deuter
     filter does not guess it from the peaks. Off by default.
     """
     _check_mode(mode)
-    _check_deuterium(deuterium)
+    deuterium = _check_deuterium(deuterium)
     peaks = list(peaks)
     prec = None if precursor_mz is None else float(precursor_mz)
     keep = [(prec is not None and abs(p[0] - prec) <= PRECURSOR_TOL)
