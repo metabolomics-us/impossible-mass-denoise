@@ -119,15 +119,20 @@ def denoise_spectrum(peaks, mode: str = "neg", halogens: bool = False, *, deuter
     filter does not guess it from the peaks. Off by default.
 
     keep_top=k protects the k most intense input peaks, even if their masses have no composition
-    under the model (issue #17). Ties are resolved by input order. Off by default.
+    under the model (issue #17). Ties are resolved by input order. Off by default. With
+    precursor_mz, only peaks more than 20 mDa below it are ranked: the precursor is already kept by
+    that option, and a matcher that drops the precursor and every ion above it before scoring
+    would never use a slot spent there.
     """
     _check_mode(mode)
     deuterium = _check_deuterium(deuterium)
     keep_top = _check_keep_top(keep_top)
     peaks = list(peaks)
     prec = None if precursor_mz is None else float(precursor_mz)
-    protected = (set(sorted(range(len(peaks)), key=lambda i: (-peaks[i][1], i))[:keep_top])
-                 if keep_top else set())
+    protected = set()
+    if keep_top:
+        ranked = [i for i, p in enumerate(peaks) if prec is None or p[0] < prec - PRECURSOR_TOL]
+        protected = set(sorted(ranked, key=lambda i: (-peaks[i][1], i))[:keep_top])
     keep = [(i in protected)
             or (prec is not None and abs(p[0] - prec) <= PRECURSOR_TOL)
             or is_possible(p[0], mode, halogens, deuterium=deuterium)

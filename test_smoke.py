@@ -306,6 +306,17 @@ check("keep_top=2 protects the two most intense peaks without reordering",
       denoise_spectrum(TOP_PEAKS, "neg", keep_top=2) == TOP_PEAKS)
 check("keep_top works with a generator and precursor_mz independently",
       denoise_spectrum(iter(TOP_PEAKS), "neg", keep_top=1, precursor_mz=120.1400) == TOP_PEAKS)
+# With precursor_mz, keep_top ranks only fragments below the precursor window: production matchers
+# drop the precursor and everything above it, so a slot spent there would protect nothing scored.
+check("with precursor_mz, keep_top=1 protects the strongest fragment below the precursor",
+      denoise_spectrum([(80.1000, 60.0), (120.1400, 100.0)], "neg", keep_top=1,
+                       precursor_mz=120.1400) == [(80.1000, 60.0), (120.1400, 100.0)])
+check("with precursor_mz, keep_top skips peaks inside the precursor window",
+      denoise_spectrum([(80.1000, 60.0), (120.1300, 90.0), (120.1400, 100.0)], "neg", keep_top=1,
+                       precursor_mz=120.1400) == [(80.1000, 60.0), (120.1300, 90.0), (120.1400, 100.0)])
+check("with precursor_mz, keep_top never protects a peak above the precursor",
+      denoise_spectrum([(59.0138, 40.0), (80.1000, 60.0), (120.1400, 100.0)], "neg", keep_top=1,
+                       precursor_mz=80.1000) == [(59.0138, 40.0), (80.1000, 60.0)])
 TIED_PEAKS = [(80.1000, 100.0), (120.1400, 100.0)]
 check("keep_top breaks intensity ties by input order",
       denoise_spectrum(TIED_PEAKS, "neg", keep_top=1) == TIED_PEAKS[:1])

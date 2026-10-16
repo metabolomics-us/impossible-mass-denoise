@@ -98,10 +98,18 @@ for anything else that reads it.
 
 **Protecting intense peaks.** `keep_top=k` keeps the `k` most intense input peaks regardless of
 their mass verdict (`keep_top=1` protects the base peak). It is off by default, and ties are
-resolved by input order. Use it when preserving match stability matters more than removing every
-peak unexplained by CHNOPS. A protected peak may truly be noise: if its mass is impossible under
-the model, this guard deliberately keeps it. Assess both correct and incorrect library matches
-on your own data before using the option in a matching pipeline.
+resolved by input order. When you also pass `precursor_mz=`, only peaks more than 20 mDa below the
+precursor are ranked, so `keep_top=1` protects the strongest fragment. The precursor is already
+kept by its own option, and many matchers drop the precursor and every ion above it before
+scoring, so a slot spent on those peaks would protect nothing that is scored.
+
+The trade-off: the guard keeps a peak because it is intense, not because its mass is possible.
+In library matching, the impossible peaks it keeps are often background ions, such as inorganic
+clusters in negative mode, that the library spectrum contains as well. Keeping them stabilises
+those matches, but it is not noise removal. If your library spectra carry the same background,
+denoise them with the same call too. Use it when match stability matters more than removing every
+peak unexplained by CHNOPS, and check both correct and incorrect library matches on your own data
+before using the option in a matching pipeline.
 
 Also available: `is_possible(mz, mode, halogens=False, *, deuterium=0)` for a single peak,
 `fingerprint()` for the chemistry hash, `table_status()` and `halogen_table_status()` for whether
