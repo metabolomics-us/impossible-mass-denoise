@@ -144,6 +144,32 @@ clear_cache()
 check("clear_cache empties the memo", cache_size() == 0 and before > 0,
       f"{before} entries -> {cache_size()}")
 
+# #29: a verdict must not depend on what was asked before. 92.926834 sits just outside the 5 mDa
+# window of its nearest composition and 92.92683 just inside; a cache keyed by m/z rounded to five
+# decimals gave the first whichever verdict the second had computed.
+EDGE_OUT, EDGE_IN = 92.926834, 92.92683
+clear_cache()
+cold_out = is_possible(EDGE_OUT, "neg")
+clear_cache()
+cold_in = is_possible(EDGE_IN, "neg")
+check("edge pair straddles the 5 mDa window", not cold_out and cold_in,
+      f"{EDGE_OUT}: {cold_out}, {EDGE_IN}: {cold_in}")
+clear_cache()
+is_possible(EDGE_IN, "neg")
+after_in = is_possible(EDGE_OUT, "neg")
+clear_cache()
+is_possible(EDGE_OUT, "neg")
+after_out = is_possible(EDGE_IN, "neg")
+check("verdicts do not depend on call order", after_in == cold_out and after_out == cold_in,
+      f"{EDGE_OUT} after {EDGE_IN}: {after_in}; {EDGE_IN} after {EDGE_OUT}: {after_out}")
+clear_cache()
+spec_cold = denoise_spectrum([(EDGE_OUT, 1.0)], "neg")
+clear_cache()
+denoise_spectrum([(EDGE_IN, 1.0)], "neg")
+check("a spectrum denoises the same after another spectrum",
+      denoise_spectrum([(EDGE_OUT, 1.0)], "neg") == spec_cold == [])
+clear_cache()
+
 # The table stores each 1 mDa bin's lowest and highest composition mass, so it must agree with
 # the solver at every tolerance it serves (2 mDa and up). IMD_NO_TABLE is read at import, so the
 # solver runs in a fresh process. The sample is small because the solver is slow.
