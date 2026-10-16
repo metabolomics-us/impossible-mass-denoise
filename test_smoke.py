@@ -55,7 +55,7 @@ def supports(func, *options):
 
 # exact ion m/z from a formula: atom masses minus an electron for a cation, plus one for an anion
 ATOM = {"C": 12.0, "H": 1.00782503223, "D": 2.01410177812, "N": 14.00307400443,
-        "O": 15.99491461957, "P": 30.97376199842, "S": 31.9720711744, "Cl": 34.968852682,
+        "O": 15.99491461957, "Cx": 13.00335483507, "Nx": 15.00010889888, "P": 30.97376199842, "S": 31.9720711744, "Cl": 34.968852682,
         "Br": 78.9183376}
 ELECTRON = 0.000548579909065
 
@@ -247,6 +247,47 @@ for bad in (-1, 1.5, True, "9"):
         check(f"rejects deuterium={bad!r}", False, "accepted silently")
     except ValueError:
         check(f"rejects deuterium={bad!r}", True)
+
+
+# 13C and 15N labels (carbon13=, nitrogen15=). Cx and Nx are 13C and 15N in the fixtures. These
+# labels shift a mass by about 1.003 and 0.997 Da, close to the hydrogen step, so most labelled
+# ions are already accepted by the default; the option removes the remaining losses in small ions.
+def find_label_loss(label, element, mode, count):
+    """Smallest small CHNO ion whose labelled version the default removes but the option keeps."""
+    for c in range(count, 9):
+        for n in range(0, 5):
+            for o in range(0, 7):
+                for h in range(1, 2 * c + n + 4):
+                    base = ion_mz(f"C{c}H{h}N{n}O{o}", mode)
+                    if not is_possible(base, mode):
+                        continue
+                    mz = base + count * (ATOM[element] - ATOM["C" if element == "Cx" else "N"])
+                    if not is_possible(mz, mode) and is_possible(mz, mode, **{label: count}):
+                        return mz, f"C{c}H{h}N{n}O{o}"
+    return None, None
+if supports(denoise_spectrum, "carbon13", "nitrogen15"):
+    mz13, f13 = find_label_loss("carbon13", "Cx", "neg", 6)
+    check("a 13C6 ion the default removes exists and carbon13=6 keeps it", mz13 is not None, f13 or "")
+    if mz13 is not None:
+        check("carbon13=6 keeps that ion in a spectrum and still removes noise",
+              denoise_spectrum([(mz13, 10.0), NOISE], "neg", carbon13=6) == [(mz13, 10.0)])
+    check("carbon13 and nitrogen15 default to off and change nothing",
+          all(is_possible(mz, mode) == is_possible(mz, mode, carbon13=0, nitrogen15=0)
+              for mz, mode in [(59.0138, "neg"), (60.0808, "pos"), (NOISE[0], "pos"), (NOISE[0], "neg")]))
+    check("carbon13=6 nitrogen15=2 still removes a noise mass in both polarities",
+          not is_possible(NOISE[0], "pos", carbon13=6, nitrogen15=2)
+          and not is_possible(NOISE[0], "neg", carbon13=6, nitrogen15=2))
+    check("13C6 15N2-lysine [M+H]+ is kept with the labels declared",
+          is_possible(ion_mz("Cx6H15Nx2O2", "pos"), "pos", carbon13=6, nitrogen15=2))
+    check("labels combine with deuterium (D3 13C1 ion kept)",
+          is_possible(ion_mz("C4H5D3NO2", "pos") + (ATOM["Cx"] - 12.0), "pos", deuterium=3, carbon13=1))
+    for kw in ("carbon13", "nitrogen15"):
+        for bad in (-1, 1.5, True, "6"):
+            try:
+                denoise_spectrum(TMAO_D9, "pos", **{kw: bad})
+                check(f"rejects {kw}={bad!r}", False, "accepted silently")
+            except ValueError:
+                check(f"rejects {kw}={bad!r}", True)
 
 LABEL_NAMES = {
     "1_D9-Choline iSTD": 9,

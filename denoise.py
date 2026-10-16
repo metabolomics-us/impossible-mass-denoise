@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import bisect
 import re
+from itertools import product
 from numbers import Integral
 
 import impossible_mass_denoise as _imd
@@ -21,6 +22,8 @@ __all__ = ["denoise_spectrum", "is_possible", "count_deuterium", "fingerprint", 
 
 _MODES = ("neg", "pos")
 D_SHIFT = 2.01410177812 - 1.00782503223   # mass a deuterium label adds over hydrogen (issue #1)
+C13_SHIFT = 13.00335483507 - 12.0          # mass a 13C label adds over 12C
+N15_SHIFT = 15.00010889888 - 14.00307400443   # mass a 15N label adds over 14N
 # A peak within 20 mDa of precursor_mz counts as the precursor (issue #2). Wider than the filter's
 # 5 mDa because a stored precursor m/z and the measured peak can differ by 10 mDa or more in
 # uncalibrated spectra.
@@ -49,14 +52,29 @@ def _check_mode(mode):
         raise ValueError(f"mode must be one of {_MODES}, got {mode!r}")
 
 
+def _check_count(name, value):
+    if isinstance(value, bool) or not isinstance(value, Integral) or value < 0:
+        raise ValueError(f"{name} must be a non-negative int, got {value!r}")
+    return int(value)
+
+
 def _check_deuterium(deuterium):
-    if isinstance(deuterium, bool) or not isinstance(deuterium, Integral) or deuterium < 0:
-        raise ValueError(f"deuterium must be a non-negative int, got {deuterium!r}")
-    return int(deuterium)
+    return _check_count("deuterium", deuterium)
+
+
+def _label_shifts(deuterium, carbon13, nitrogen15):
+    """Every mass offset a labelled ion can carry: 0..n of each declared label, combined.
+
+    Sorted and without duplicates; the first entry is always 0.0 (the unlabelled ion). The
+    number of offsets, and so of table lookups per peak, is (d+1)(c+1)(n+1).
+    """
+    return sorted({d * D_SHIFT + c * C13_SHIFT + n * N15_SHIFT
+                   for d, c, n in product(range(deuterium + 1), range(carbon13 + 1),
+                                          range(nitrogen15 + 1))})
 
 
 def is_possible(mz: float, mode: str = "neg", halogens: bool = False, *,
-                deuterium: int = 0) -> bool:
+                deuterium: int = 0, carbon13: int = 0, nitrogen15: int = 0) -> bool:
     """True when some composition in the alphabet could produce this ion m/z in this polarity.
 
     mode is "neg" or "pos". The alphabet is C/H/N/O/P/S, plus Cl/F/Br/I when halogens=True.
@@ -67,13 +85,19 @@ def is_possible(mz: float, mode: str = "neg", halogens: bool = False, *,
     accepted when taking off between 1 and n deuterium labels (1.0063 Da each) leaves a possible
     ion, so fragments that kept all, some or none of the labels survive. n is the standard's
     label count, 9 for a D9 standard.
+
+    carbon13=n and nitrogen15=n do the same for 13C (1.0034 Da) and 15N (0.9970 Da) labels, and
+    the three can be combined: every mix of 0..n of each declared label is tried. Declare only
+    the labels the standard carries. Each combination costs one lookup, (d+1)(c+1)(n+1) in all.
     """
     _check_mode(mode)
     deuterium = _check_deuterium(deuterium)
+    carbon13 = _check_count("carbon13", carbon13)
+    nitrogen15 = _check_count("nitrogen15", nitrogen15)
     mz = float(mz)
-    return any(_imd.possible(mz - k * D_SHIFT, mode=mode, d_max=0, union=True,
+    return any(_imd.possible(mz - shift, mode=mode, d_max=0, union=True,
                              use_halogens=bool(halogens))[0]
-               for k in range(deuterium + 1) if mz - k * D_SHIFT > 0)
+               for shift in _label_shifts(deuterium, carbon13, nitrogen15) if mz - shift > 0)
 
 
 def _near(sorted_mz, target):
@@ -83,7 +107,7 @@ def _near(sorted_mz, target):
 
 
 def denoise_spectrum(peaks, mode: str = "neg", halogens: bool = False, *, deuterium: int = 0,
-                     precursor_mz: float | None = None):
+                     precursor_mz: float | None = None, carbon13: int = 0, nitrogen15: int = 0):
     """Return the peaks that survive the filter, in the order given.
 
     halogens=False (the default) is the validated configuration. halogens=True keeps fragments
@@ -97,6 +121,11 @@ def denoise_spectrum(peaks, mode: str = "neg", halogens: bool = False, *, deuter
     the filter does not infer it from the peaks. Each label adds a lookup and makes the filter a
     little more permissive, so use it only for that standard's spectra.
 
+    carbon13=n and nitrogen15=n are the same for 13C- and 15N-labelled standards (for example
+    carbon13=6, nitrogen15=2 for a 13C6 15N2 amino acid). They combine with deuterium=; the
+    filter tries every mix of 0..n of each declared label. Declare only what the standard
+    carries: the lookups multiply, and the filter gets more permissive with every label.
+
     peaks is any iterable of (mz, intensity) pairs; the return is a list of the same pairs.
     Intensity is passed through untouched - this filter removes peaks, it never rescales them.
     An empty result is possible and legitimate: every peak in that spectrum was impossible.
@@ -107,10 +136,13 @@ def denoise_spectrum(peaks, mode: str = "neg", halogens: bool = False, *, deuter
     """
     _check_mode(mode)
     deuterium = _check_deuterium(deuterium)
+    carbon13 = _check_count("carbon13", carbon13)
+    nitrogen15 = _check_count("nitrogen15", nitrogen15)
     peaks = list(peaks)
     prec = None if precursor_mz is None else float(precursor_mz)
     keep = [(prec is not None and abs(p[0] - prec) <= PRECURSOR_TOL)
-            or is_possible(p[0], mode, halogens, deuterium=deuterium) for p in peaks]
+            or is_possible(p[0], mode, halogens, deuterium=deuterium, carbon13=carbon13,
+                           nitrogen15=nitrogen15) for p in peaks]
     if halogens:
         # Walk up in m/z so a heavy-isotope peak can lean on a partner kept just before it, and a
         # chain such as two chlorines (M, M+2, M+4) carries through.
