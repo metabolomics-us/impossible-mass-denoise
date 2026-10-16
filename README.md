@@ -88,12 +88,14 @@ leaves a possible ion. They combine with `deuterium=` and with each other, for e
 each declared label, so the lookups per peak are (d+1)(c+1)(n+1); declare only the labels the
 standard carries and never infer them from the peaks. The need is much smaller than for
 deuterium, because a ¹³C or ¹⁵N step is close to the hydrogen step the alphabet already
-contains. On 1,000 random small CHNO ions (up to 8 carbons) the default removed the labelled ion
-in 1% to 5% of cases for ¹³C₁ to ¹³C₆, under 1% for ¹⁵N and 2% to 20% for D₁ to D₉; with the
-option declared none were removed. For larger molecules (3 to 40 carbons) the default removes
-at most 3% for any label. Isotopes that are **not** covered: ¹⁴C (radioactive, not a
-mass-spectrometry label), ¹⁸O, ³⁴S, ²H in natural abundance, and the natural ¹³C isotope peaks of
-an unlabelled ion. `count_deuterium` does not read ¹³C or ¹⁵N from names, so pass the counts
+contains. On 1,000 random small ions (up to 8 carbons) the default removed the labelled ion in
+0.7% to 5.5% of cases for ¹³C₁ to ¹³C₆ (more when the ions carry little sulfur or phosphorus),
+under 1% for ¹⁵N and 2% to 20% for D₁ to D₉; with the option declared none were removed. For
+larger molecules (3 to 40 carbons) the default removes at most 3% for any label. ¹⁷O, ¹⁸O, ³³S
+and ³⁴S were tested the same way and the default already accepts them (0% to 0.6% removed, up to
+four ¹⁸O or two ³⁴S), so they have no option. Isotopes that are **not** covered: ¹⁴C (radioactive, not a
+mass-spectrometry label), ¹⁷O, ¹⁸O, ³³S and ³⁴S (tested, not needed, see above) and the natural
+isotope peaks of an unlabelled ion. `count_deuterium` does not read ¹³C or ¹⁵N from names, so pass the counts
 yourself.
 
 `count_deuterium(name)` extracts the largest D-label token from a known standard's library name,
