@@ -81,6 +81,11 @@ For lipid standards with d5 to d9 labels on larger ions, trying every allowed la
 make most peaks pass. Check that the option still removes noise on your lipid method before using
 it there; the benefit seen for small polar standards does not carry over automatically.
 
+`count_deuterium(name)` extracts the largest D-label token from a known standard's library name,
+or returns 0 if none is present. For example, `count_deuterium("1_D9-Choline iSTD")` is 9 and
+`count_deuterium("1_Sphingosine d17:1 iSTD")` is 0. Check the name before passing its count to
+`denoise_spectrum`; the helper does not establish that a spectrum belongs to that standard.
+
 **Keeping the precursor.** The filter judges every peak by its m/z alone, so it can remove the
 precursor itself: a doubly charged precursor has no singly charged composition, and a precursor
 measured more than 5 mDa off its true mass can miss every composition. `precursor_mz=` keeps any

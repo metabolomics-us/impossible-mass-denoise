@@ -22,7 +22,7 @@ import sys
 import time
 import numpy as np
 
-from denoise import (denoise_spectrum, is_possible, fingerprint, table_status,
+from denoise import (denoise_spectrum, is_possible, count_deuterium, fingerprint, table_status,
                      halogen_table_status, cache_size, clear_cache)
 
 EXPECTED_FINGERPRINT = "5aae4ec26694da4d"   # same chemistry for both tables
@@ -248,6 +248,20 @@ for bad in (-1, 1.5, True, "9"):
     except ValueError:
         check(f"rejects deuterium={bad!r}", True)
 
+LABEL_NAMES = {
+    "1_D9-Choline iSTD": 9,
+    "1_PC 17:0/22:4-d5 iSTD": 5,
+    "1_Cer 18:1 d18:1-d7/18:1 iSTD": 7,
+    "1_PS 15:0_18:1 d7_ISTD": 7,
+    "1_Sphingosine d17:1 iSTD": 0,
+    "1_CUDA iSTD": 0,
+    "D3-Serine iSTD": 3,
+    "13C6 15N2-Serine iSTD": 0,
+    "D3-D5-Serine iSTD": 5,
+}
+for name, expected in LABEL_NAMES.items():
+    check(f"counts D labels in {name!r}", count_deuterium(name) == expected)
+
 for count in (5, np.int32(5), np.int64(5)):
     check(f"accepts deuterium={type(count).__name__}",
           denoise_spectrum(TMAO_D9, "pos", deuterium=count)
@@ -255,6 +269,7 @@ for count in (5, np.int32(5), np.int64(5)):
     check(f"is_possible accepts deuterium={type(count).__name__}",
           is_possible(TMAO_D9[0][0], "pos", deuterium=count)
           == is_possible(TMAO_D9[0][0], "pos", deuterium=5))
+
 # #2 and #4: the precursor. Imatinib [M+2H]2+ is both the precursor and the base peak of its
 # spectrum. It is doubly charged, so no singly charged composition explains it. Callers know the
 # precursor m/z from the library entry; the filter should not have to guess it.
