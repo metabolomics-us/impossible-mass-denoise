@@ -54,7 +54,7 @@ kept = denoise_spectrum(peaks, mode="neg")                   # peaks = [(mz, int
 kept = denoise_spectrum(peaks, mode="neg", halogens=True)    # also allow Cl/F/Br/I
 kept = denoise_spectrum(peaks, mode="pos", deuterium=9)      # a D9-labelled internal standard
 kept = denoise_spectrum(peaks, mode="pos", precursor_mz=prec)   # never remove the precursor
-kept = denoise_spectrum(peaks, mode="neg", keep_top=1)       # protect the base peak
+kept = denoise_spectrum(peaks, mode="neg", precursor_mz=prec, keep_top=3)  # for library matching
 ```
 
 `mode` is `"neg"` or `"pos"`. The return is the surviving peaks, same tuples, same order.
@@ -103,13 +103,18 @@ precursor are ranked, so `keep_top=1` protects the strongest fragment. The precu
 kept by its own option, and many matchers drop the precursor and every ion above it before
 scoring, so a slot spent on those peaks would protect nothing that is scored.
 
+**For library matching, use `keep_top=3` with `precursor_mz=`.** With `keep_top=1` most of the lost
+matches remain, because the second and third strongest fragments are often removed as well;
+`keep_top=3` recovers far more of them and breaks very few matches that pass without it.
+
 The trade-off: the guard keeps a peak because it is intense, not because its mass is possible.
 In library matching, the impossible peaks it keeps are often background ions, such as inorganic
 clusters in negative mode, that the library spectrum contains as well. Keeping them stabilises
-those matches, but it is not noise removal. If your library spectra carry the same background,
-denoise them with the same call too. Use it when match stability matters more than removing every
-peak unexplained by CHNOPS, and check both correct and incorrect library matches on your own data
-before using the option in a matching pipeline.
+those matches, but it is not noise removal. Denoising the library spectra with the same call is an
+alternative; in our tests it recovered fewer matches than `keep_top=3` and added nothing on top of
+it. Use the guard when match stability matters more than removing every peak unexplained by
+CHNOPS, and check both correct and incorrect library matches on your own data before using it in a
+matching pipeline.
 
 Also available: `is_possible(mz, mode, halogens=False, *, deuterium=0)` for a single peak,
 `fingerprint()` for the chemistry hash, `table_status()` and `halogen_table_status()` for whether
