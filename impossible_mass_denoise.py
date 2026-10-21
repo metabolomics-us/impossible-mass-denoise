@@ -298,8 +298,10 @@ def _table_lookup(mz, tol, mode, d_max, use_halogens, alkali, union):
 
 def possible(mz, tol=0.005, mode="neg", d_max=0, use_halogens=False, strict=False, union=True,
              alkali=False, need_formula=False):
-    """Cached wrapper around the Diophantine feasibility test (m/z rounded for the key;
-    huge speedup on large runs where fragment masses recur).
+    """Cached wrapper around the Diophantine feasibility test (huge speedup on large runs where
+    fragment masses recur). The cache is keyed by the exact m/z: a rounded key let two masses a
+    hair apart share one entry, so a peak at the edge of the tolerance window got whichever verdict
+    its neighbour computed first and results depended on call order (issue #29).
 
     Three validity models (a candidate composition matching the ion mass must also be
     chemically legal):
@@ -318,7 +320,7 @@ def possible(mz, tol=0.005, mode="neg", d_max=0, use_halogens=False, strict=Fals
     (see load_table); those return (verdict, None) because the table stores reachable MASSES,
     not witness formulas -- True with a None formula means "not computed", False still means
     "no composition exists". Pass need_formula=True to force the solver and get the witness."""
-    key = (round(mz, 5), tol, mode, d_max, use_halogens, strict, union, alkali)
+    key = (float(mz), tol, mode, d_max, use_halogens, strict, union, alkali)
     hit = _CACHE.get(key)
     if hit is not None:
         return hit
@@ -335,7 +337,7 @@ def possible(mz, tol=0.005, mode="neg", d_max=0, use_halogens=False, strict=Fals
                        and d_max == TABLE_CONFIG["d_max"]
                        and alkali == TABLE_CONFIG["alkali"])
     if not need_formula and _table_eligible:
-        tkey = (round(mz, 5), tol, mode, bool(use_halogens))
+        tkey = (float(mz), tol, mode, bool(use_halogens))
         hit = _TCACHE.get(tkey)
         if hit is not None:
             return hit
