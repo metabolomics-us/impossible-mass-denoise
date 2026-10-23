@@ -53,6 +53,7 @@ from denoise import denoise_spectrum
 kept = denoise_spectrum(peaks, mode="neg")                   # peaks = [(mz, intensity), ...]
 kept = denoise_spectrum(peaks, mode="neg", halogens=True)    # also allow Cl/F/Br/I
 kept = denoise_spectrum(peaks, mode="pos", deuterium=9)      # a D9-labelled internal standard
+kept = denoise_spectrum(peaks, mode="pos", carbon13=6, nitrogen15=2)   # a 13C6 15N2 standard
 kept = denoise_spectrum(peaks, mode="pos", precursor_mz=prec)   # never remove the precursor
 kept = denoise_spectrum(peaks, mode="neg", precursor_mz=prec, keep_top=3)  # for library matching
 ```
@@ -76,10 +77,27 @@ the standard's name, never from the peaks; in lipid names, sphingoid-base notati
 is not a label. Use the option only for that standard's spectra: each label adds a lookup and
 makes the filter a little more permissive. With `deuterium=9`, the share of masses between 50 and
 700 Da that the filter can reject falls from 35% to 31%, and a cold lookup takes about 9 µs
-instead of 5 to 6. ¹³C and ¹⁵N labels are not covered.
+instead of 5 to 6.
 For lipid standards with d5 to d9 labels on larger ions, trying every allowed label shift can
 make most peaks pass. Check that the option still removes noise on your lipid method before using
 it there; the benefit seen for small polar standards does not carry over automatically.
+
+**¹³C and ¹⁵N labelled standards.** `carbon13=n` and `nitrogen15=n` work like `deuterium=`: a peak
+is also kept when taking off between one and n labels (1.0034 Da per ¹³C, 0.9970 Da per ¹⁵N)
+leaves a possible ion. They combine with `deuterium=` and with each other, for example
+`carbon13=6, nitrogen15=2` for a ¹³C₆ ¹⁵N₂ amino acid. The filter tries every mix of 0 to n of
+each declared label, so the lookups per peak are (d+1)(c+1)(n+1); declare only the labels the
+standard carries and never infer them from the peaks. The need is much smaller than for
+deuterium, because a ¹³C or ¹⁵N step is close to the hydrogen step the alphabet already
+contains. On 1,000 random small ions (up to 8 carbons) the default removed the labelled ion in
+0.7% to 5.5% of cases for ¹³C₁ to ¹³C₆ (more when the ions carry little sulfur or phosphorus),
+under 1% for ¹⁵N and 2% to 20% for D₁ to D₉; with the option declared none were removed. For
+larger molecules (3 to 40 carbons) the default removes at most 3% for any label. ¹⁷O, ¹⁸O, ³³S
+and ³⁴S were tested the same way and the default already accepts them (0% to 0.6% removed, up to
+four ¹⁸O or two ³⁴S), so they have no option. Isotopes that are **not** covered: ¹⁴C (radioactive, not a
+mass-spectrometry label), ¹⁷O, ¹⁸O, ³³S and ³⁴S (tested, not needed, see above) and the natural
+isotope peaks of an unlabelled ion. `count_deuterium` does not read ¹³C or ¹⁵N from names, so pass the counts
+yourself.
 
 `count_deuterium(name)` extracts the largest D-label token from a known standard's library name,
 or returns 0 if none is present. For example, `count_deuterium("1_D9-Choline iSTD")` is 9 and
@@ -116,7 +134,7 @@ it. Use the guard when match stability matters more than removing every peak une
 CHNOPS, and check both correct and incorrect library matches on your own data before using it in a
 matching pipeline.
 
-Also available: `is_possible(mz, mode, halogens=False, *, deuterium=0)` for a single peak,
+Also available: `is_possible(mz, mode, halogens=False, *, deuterium=0, carbon13=0, nitrogen15=0)` for a single peak,
 `fingerprint()` for the chemistry hash, `table_status()` and `halogen_table_status()` for whether
 each table loaded, and `cache_size()` / `clear_cache()` (see below).
 
