@@ -14,8 +14,8 @@ own reference set before deploying.
 It needs nothing but the m/z and the polarity — no precursor formula, no adduct, no candidate
 structure. That is the point: it runs on unannotated bins, where formula-based denoisers cannot.
 
-It removes noise on Orbitrap data. On TTOF data it has shown no measurable benefit; see
-[Which instruments it helps](#which-instruments-it-helps).
+It removes noise on Orbitrap data. Leave it off for TTOF data unless your own data show a benefit,
+and do not use it on QTOF data; see [Which instruments it helps](#which-instruments-it-helps).
 
 ## Install
 
@@ -55,6 +55,7 @@ kept = denoise_spectrum(peaks, mode="neg", halogens=True)    # also allow Cl/F/B
 kept = denoise_spectrum(peaks, mode="pos", deuterium=9)      # a D9-labelled internal standard
 kept = denoise_spectrum(peaks, mode="pos", carbon13=6, nitrogen15=2)   # a 13C6 15N2 standard
 kept = denoise_spectrum(peaks, mode="pos", precursor_mz=prec)   # never remove the precursor
+kept = denoise_spectrum(peaks, mode="neg", precursor_mz=prec, keep_top=3)  # for library matching
 ```
 
 `mode` is `"neg"` or `"pos"`. The return is the surviving peaks, same tuples, same order.
@@ -113,6 +114,26 @@ It is off by default, costs one peak per spectrum and changes nothing else. A ma
 the precursor before scoring gets the same score with or without it; the option keeps the peak
 for anything else that reads it.
 
+**Protecting intense peaks.** `keep_top=k` keeps the `k` most intense input peaks regardless of
+their mass verdict (`keep_top=1` protects the base peak). It is off by default, and ties are
+resolved by input order. When you also pass `precursor_mz=`, only peaks more than 20 mDa below the
+precursor are ranked, so `keep_top=1` protects the strongest fragment. The precursor is already
+kept by its own option, and many matchers drop the precursor and every ion above it before
+scoring, so a slot spent on those peaks would protect nothing that is scored.
+
+**For library matching, use `keep_top=3` with `precursor_mz=`.** With `keep_top=1` most of the lost
+matches remain, because the second and third strongest fragments are often removed as well;
+`keep_top=3` recovers far more of them and breaks very few matches that pass without it.
+
+The trade-off: the guard keeps a peak because it is intense, not because its mass is possible.
+In library matching, the impossible peaks it keeps are often background ions, such as inorganic
+clusters in negative mode, that the library spectrum contains as well. Keeping them stabilises
+those matches, but it is not noise removal. Denoising the library spectra with the same call is an
+alternative; in our tests it recovered fewer matches than `keep_top=3` and added nothing on top of
+it. Use the guard when match stability matters more than removing every peak unexplained by
+CHNOPS, and check both correct and incorrect library matches on your own data before using it in a
+matching pipeline.
+
 Also available: `is_possible(mz, mode, halogens=False, *, deuterium=0, carbon13=0, nitrogen15=0)` for a single peak,
 `fingerprint()` for the chemistry hash, `table_status()` and `halogen_table_status()` for whether
 each table loaded, and `cache_size()` / `clear_cache()` (see below).
@@ -149,14 +170,39 @@ come back scan after scan; random noise does not.
 - On the TTOF HILIC methods, the removed ions recur as often as the kept ones, so the filter
   showed no measurable benefit there. Measure it on your own data before using it on TTOF.
 - The one QTOF method with raw files showed only a small difference, and ions recurred rarely
-  whether removed or kept. Treat QTOF as unvalidated.
+  whether removed or kept.
 - Below 1% of the base peak, the difference still depends on the instrument. Removed Orbitrap
   ions recur much less often than kept ions at the same intensity; TTOF shows no measurable gap,
   while the QTOF difference is small.
 
-Why TTOF differs has not been tested. Lower fragment mass accuracy is the obvious candidate, since
-the filter assumes masses within 5 mDa of exact. Recurring across scans is also not proof that an
-ion is real, because an artifact at a fixed m/z recurs too; the Orbitrap result holds either way.
+Recurring across scans is not proof that an ion is real, because an artifact at a fixed m/z recurs
+too; the Orbitrap result holds either way.
+
+**Recommendation by instrument.**
+
+| Instrument | Use the filter? |
+|---|---|
+| Orbitrap | Yes. |
+| TTOF | Off by default. Turn it on only after checking both correct and incorrect matches on your own data. |
+| QTOF | No. |
+
+The reason is fragment mass accuracy. The filter assumes a real ion lies within 5 mDa of an exact
+composition, and the TTOF and QTOF data we checked break that assumption in three ways:
+
+- On TTOF, some real small fragments are recorded tens of mDa off their exact mass, so the filter
+  removes them. In labelled internal standards this costs matches that `deuterium=` cannot
+  rescue, because the label is not the problem.
+- On TTOF, the precursor of some small standards is recorded in the MS/MS scan about 0.2 Da below
+  its true m/z. `precursor_mz=` protects only 20 mDa around the m/z you pass, so it cannot reach
+  such a peak. An offset this large points to an instrument calibration problem worth checking at
+  the source.
+- On QTOF, fragment masses scatter by tenths of a Da, so the 5 mDa test cannot recognise real
+  fragments at all.
+
+On TTOF the filter also finds nothing to remove in many spectra, because with that mass accuracy few
+masses are provably impossible. A wider tolerance would keep the misplaced fragments but not the
+offset precursors, and it weakens the filter everywhere; it has not been tested and is not
+recommended.
 
 ## Performance
 

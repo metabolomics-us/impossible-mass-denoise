@@ -11,6 +11,7 @@ and the removal of a command-line demo that read internal data files.
 from __future__ import annotations
 
 import bisect
+import operator
 import re
 from itertools import product
 from numbers import Integral
@@ -73,6 +74,18 @@ def _label_shifts(deuterium, carbon13, nitrogen15):
                                           range(nitrogen15 + 1))})
 
 
+def _check_keep_top(keep_top):
+    if isinstance(keep_top, bool):
+        raise ValueError(f"keep_top must be a non-negative integer, got {keep_top!r}")
+    try:
+        count = operator.index(keep_top)
+    except TypeError as exc:
+        raise ValueError(f"keep_top must be a non-negative integer, got {keep_top!r}") from exc
+    if count < 0:
+        raise ValueError(f"keep_top must be a non-negative integer, got {keep_top!r}")
+    return count
+
+
 def is_possible(mz: float, mode: str = "neg", halogens: bool = False, *,
                 deuterium: int = 0, carbon13: int = 0, nitrogen15: int = 0) -> bool:
     """True when some composition in the alphabet could produce this ion m/z in this polarity.
@@ -107,7 +120,8 @@ def _near(sorted_mz, target):
 
 
 def denoise_spectrum(peaks, mode: str = "neg", halogens: bool = False, *, deuterium: int = 0,
-                     precursor_mz: float | None = None, carbon13: int = 0, nitrogen15: int = 0):
+                     precursor_mz: float | None = None, keep_top: int = 0, carbon13: int = 0,
+                     nitrogen15: int = 0):
     """Return the peaks that survive the filter, in the order given.
 
     halogens=False (the default) is the validated configuration. halogens=True keeps fragments
@@ -133,16 +147,29 @@ def denoise_spectrum(peaks, mode: str = "neg", halogens: bool = False, *, deuter
     precursor_mz keeps the precursor whatever its verdict (issue #2): any peak within 20 mDa of
     this m/z. Pass the precursor m/z you know from the library entry or the scan header; the
     filter does not guess it from the peaks. Off by default.
+
+    keep_top=k protects the k most intense input peaks, even if their masses have no composition
+    under the model (issue #17). Ties are resolved by input order. Off by default. With
+    precursor_mz, only peaks more than 20 mDa below it are ranked: the precursor is already kept by
+    that option, and a matcher that drops the precursor and every ion above it before scoring
+    would never use a slot spent there.
     """
     _check_mode(mode)
     deuterium = _check_deuterium(deuterium)
     carbon13 = _check_count("carbon13", carbon13)
     nitrogen15 = _check_count("nitrogen15", nitrogen15)
+    keep_top = _check_keep_top(keep_top)
     peaks = list(peaks)
     prec = None if precursor_mz is None else float(precursor_mz)
-    keep = [(prec is not None and abs(p[0] - prec) <= PRECURSOR_TOL)
+    protected = set()
+    if keep_top:
+        ranked = [i for i, p in enumerate(peaks) if prec is None or p[0] < prec - PRECURSOR_TOL]
+        protected = set(sorted(ranked, key=lambda i: (-peaks[i][1], i))[:keep_top])
+    keep = [(i in protected)
+            or (prec is not None and abs(p[0] - prec) <= PRECURSOR_TOL)
             or is_possible(p[0], mode, halogens, deuterium=deuterium, carbon13=carbon13,
-                           nitrogen15=nitrogen15) for p in peaks]
+                           nitrogen15=nitrogen15)
+            for i, p in enumerate(peaks)]
     if halogens:
         # Walk up in m/z so a heavy-isotope peak can lean on a partner kept just before it, and a
         # chain such as two chlorines (M, M+2, M+4) carries through.
