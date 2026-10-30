@@ -29,6 +29,7 @@ from pydantic import ValidationError
 
 import denoise
 from denoise_service import classify as classify_mod
+from denoise_service import convert as convert_mod
 from denoise_service.classify import Options
 from denoise_service.config import Config
 from denoise_service.limits import TokenBucket
@@ -60,6 +61,17 @@ class SpectrumRequest(BaseModel):
 
 _FIELDS = {"mode", "peaks", "spectrum", "halogens", "deuterium", "carbon13", "nitrogen15",
            "precursor_mz", "id"}
+
+
+class ConvertRequest(BaseModel):
+    text: StrictStr
+    format: Optional[StrictStr] = None
+    mode: Optional[StrictStr] = None
+    halogens: StrictBool = False
+    deuterium: StrictInt = 0
+    carbon13: StrictInt = 0
+    nitrogen15: StrictInt = 0
+    precursor_mz: Optional[_Number] = None
 
 
 class ApiError(Exception):
@@ -316,6 +328,57 @@ def create_app(config: Config) -> FastAPI:
                 results.append(out)
             return {"results": results}
         return compute, sum(len(p[0]) for p in parsed)
+
+    def convert_work(raw: Any):
+        if not isinstance(raw, dict):
+            raise ApiError(422, "body must be a JSON object")
+        unknown = sorted(k for k in raw if k not in ConvertRequest.model_fields)
+        if unknown:
+            key = unknown[0]
+            raise ApiError(422, "unknown field: %s" % (key if len(key) <= 32 else key[:32] + "..."))
+        try:
+            req = ConvertRequest(**raw)
+        except ValidationError as exc:
+            raise ApiError(422, _model_error(exc))
+        if req.mode not in (None, "pos", "neg"):
+            raise ApiError(422, 'mode: must be "pos" or "neg"')
+        for name in ("deuterium", "carbon13", "nitrogen15"):
+            v = getattr(req, name)
+            if v < 0 or v > config.max_label:
+                raise ApiError(422, "%s: must be between 0 and %d" % (name, config.max_label))
+        if (req.deuterium + 1) * (req.carbon13 + 1) * (req.nitrogen15 + 1) > config.max_label_lookups:
+            raise ApiError(422, "label counts too large: (d+1)*(c+1)*(n+1) must be at most %d"
+                           % config.max_label_lookups)
+        if req.precursor_mz is not None and not (math.isfinite(req.precursor_mz)
+                                                 and req.precursor_mz > 0):
+            raise ApiError(422, "precursor_mz: must be a finite number greater than zero")
+        if not req.text.strip():
+            raise ApiError(422, "text: no spectrum found")
+        try:
+            prep = convert_mod.prepare(
+                req.text, req.mode, None if req.precursor_mz is None else float(req.precursor_mz),
+                config.max_peaks, config.max_batch, req.format)
+        except convert_mod.ConvertLimitError as exc:
+            raise ApiError(422, exc.reason)
+        lookups = (req.deuterium + 1) * (req.carbon13 + 1) * (req.nitrogen15 + 1)
+        classified = [r for r in prep.records if r.error is None and r.mode is not None]
+        _check_budget(sum(len(r.values) for r in classified) * lookups, config)
+
+        def classify_peaks(peaks, mode, precursor):
+            return classify_mod.classify(peaks, Options(
+                mode=mode, halogens=req.halogens, deuterium=req.deuterium,
+                carbon13=req.carbon13, nitrogen15=req.nitrogen15,
+                precursor_mz=precursor)).possible
+
+        def compute() -> Dict[str, Any]:
+            res = convert_mod.apply(prep, classify_peaks)
+            return {"fingerprint": state["fp"], "format": res.format, "text": res.text,
+                    "records": res.records, "summary": res.summary}
+        return compute, sum(len(r.values) for r in prep.records)
+
+    @app.post("/v1/convert")
+    async def convert_endpoint(request: Request) -> Response:
+        return await handle(request, convert_work)
 
     @app.post("/v1/classify")
     async def classify_endpoint(request: Request) -> Response:
