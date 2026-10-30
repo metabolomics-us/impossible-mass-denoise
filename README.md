@@ -340,7 +340,24 @@ python -m denoise_service --config denoise_service/config.example.yaml
 | `GET /` | Web page: paste a spectrum, see the plot |
 | `POST /v1/classify` | Classify one spectrum |
 | `POST /v1/classify/batch` | Classify several spectra |
+| `POST /v1/convert` | Clean text in its own format: MSP, MGF, `mz:int` strings or two columns |
 | `GET /healthz` | Health and chemistry fingerprint |
+
+`POST /v1/convert` takes `{"text": "...", "mode": "pos"|"neg", "precursor_mz": 123.4, "halogens": false,
+"deuterium": 0, "carbon13": 0, "nitrogen15": 0, "format": "msp"|"mgf"|"strings"|"columns"}` (only
+`text` is required; `format` overrides detection) and returns `{fingerprint, format, text, records, summary}`.
+Cleaning removes the ions the filter calls impossible and nothing else: kept peaks keep their original
+text, MSP `Num Peaks:` is rewritten when ions were removed, and every other line passes through verbatim.
+Input format equals output format, with `strings` giving one cleaned line per input line (an all-removed
+spectrum becomes an empty line). Ion mode and precursor come from each record's metadata (MSP
+`IonMode`/`Ion_mode`/`Ionization`, `PrecursorMZ`; MGF `IONMODE`, `PEPMASS`, `CHARGE` sign) and otherwise
+from the request. A record that cannot be cleaned (no ion mode, unparseable, over `max_peaks`) is
+returned unchanged with a short `error` in its `records` entry; the request still succeeds. Each
+`records` entry is `{index, name, total, impossible, error, mode, precursor_mz}`.
+
+Annotated peak lines such as `181.07 10 "C6H13O6+"` (NIST and MassBank style: m/z, intensity, then
+annotation text, quoted or bare) are supported only in MSP and MGF records. Each is one peak and is kept
+or removed whole, annotation included; `/v1/classify` does not accept annotations.
 
 The public URL is https://denoise.metabolomics.us. Deployment (nginx, DNS, the systemd unit) is in
 [ops/deploy/README.md](ops/deploy/README.md). The service imports Ziyue's modules unmodified.

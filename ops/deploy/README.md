@@ -93,7 +93,16 @@ curl -s -X POST https://denoise.metabolomics.us/v1/classify \
 ```
 
 The first returns the status and chemistry fingerprint; the second returns one entry per peak
-with a `possible` flag and a `summary`.
+with a `possible` flag and a `summary`. The conversion endpoint is checked the same way:
+
+```bash
+curl -s -X POST https://denoise.metabolomics.us/v1/convert \
+     -H 'Content-Type: application/json' \
+     -d '{"mode":"pos","text":"181.0707:100 100.5:20 85.0284:40"}'
+```
+
+It returns the input text in its own format with the impossible ions removed
+(`181.0707:100 85.0284:40`) plus one `records` entry per spectrum.
 
 ## 5. Rollback
 

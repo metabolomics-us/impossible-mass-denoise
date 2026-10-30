@@ -12,43 +12,85 @@
   <h1>Impossible-mass denoise</h1>
   <p class="sub">West Coast Metabolomics Center &middot; UC Davis</p>
 </header>
-<main>
-  <form id="form" novalidate>
-    <label for="spectrum">Spectrum (m/z:intensity pairs, one pair per line or space separated)</label>
-    <textarea id="spectrum" rows="8" spellcheck="false" placeholder="86.06:45 104.11:100 ..."></textarea>
+<main class="layout">
+  <section class="input" aria-label="Input">
+    <form id="form" novalidate>
+      <label for="spectrum">Spectra: paste text or load a file (MSP, MGF, or one mz:intensity string per line)</label>
+      <textarea id="spectrum" rows="9" spellcheck="false" placeholder="86.06:45 104.11:100 ..."></textarea>
 
-    <fieldset>
-      <legend>Polarity</legend>
-      <label class="inline"><input type="radio" name="mode" value="neg"> neg</label>
-      <label class="inline"><input type="radio" name="mode" value="pos"> pos</label>
-    </fieldset>
+      <div class="row filerow">
+        <input type="file" id="file" accept=".msp,.mgf,.txt,text/plain">
+        <label class="filebtn" for="file">Load a file (.msp .mgf .txt)</label>
+        <span id="filename" class="muted"></span>
+      </div>
 
-    <div class="row">
-      <label class="inline"><input type="checkbox" id="halogens"> Allow halogens (F, Cl, Br, I)</label>
-      <label class="inline" for="precursor">Precursor m/z (optional)
-        <input type="text" inputmode="decimal" id="precursor" size="10"></label>
-    </div>
+      <div class="row opts">
+        <span class="optgroup" role="radiogroup" aria-label="Polarity, used when a record does not say">
+          <span class="optlabel">Polarity</span>
+          <label class="inline"><input type="radio" name="mode" value="neg"> neg</label>
+          <label class="inline"><input type="radio" name="mode" value="pos"> pos</label>
+        </span>
+        <label class="inline"><input type="checkbox" id="halogens"> Halogens</label>
+        <label class="inline" for="precursor">Precursor m/z
+          <input type="text" inputmode="decimal" id="precursor" size="8"></label>
+      </div>
 
-    <button type="submit" id="go">Classify</button>
-    <p id="message" role="alert" class="message" hidden></p>
-  </form>
+      <div class="row">
+        <button type="submit" id="go">Clean</button>
+        <button type="button" id="cancel" class="secondary" hidden>Cancel</button>
+      </div>
+      <p id="progress" class="muted" role="status" aria-live="polite"></p>
+      <p id="message" role="alert" class="message" hidden></p>
+    </form>
+    <details class="caveat">
+      <summary>Impossible means not explained by CHNOPS (details)</summary>
+      <p>Impossible means not explained by CHNOPS, singly charged, monoisotopic. Works for Orbitrap data; off by default for TTOF; not for QTOF. Ions above 1700 m/z are always reported possible.</p>
+    </details>
+    <p class="muted"><a href="/docs">API docs</a> &middot; <a href="/openapi.json">OpenAPI JSON</a></p>
+  </section>
 
-  <section id="result" aria-live="polite" hidden>
+  <section id="result" class="output" aria-label="Result" aria-live="polite" hidden>
     <p id="summary" class="summary"></p>
-    <div id="plot"></div>
     <div class="actions">
+      <button type="button" id="download" class="secondary">Download cleaned</button>
+      <button type="button" id="copycleaned" class="secondary">Copy cleaned</button>
       <button type="button" id="copy" class="secondary">Copy as JSON</button>
       <span id="copystatus" class="muted"></span>
     </div>
-    <table id="table">
-      <thead><tr><th scope="col">m/z</th><th scope="col">Intensity</th><th scope="col">Verdict</th></tr></thead>
-      <tbody></tbody>
-    </table>
+    <p id="plotinfo" class="muted"></p>
+    <div class="plotbar" role="group" aria-label="Plot zoom">
+      <button type="button" id="zoomin" class="secondary small" aria-label="Zoom in">+</button>
+      <button type="button" id="zoomout" class="secondary small" aria-label="Zoom out">&minus;</button>
+      <button type="button" id="panleft" class="secondary small" aria-label="Pan left">&larr;</button>
+      <button type="button" id="panright" class="secondary small" aria-label="Pan right">&rarr;</button>
+      <button type="button" id="zoomreset" class="secondary small">Reset</button>
+      <span id="range" class="muted"></span>
+    </div>
+    <div id="plot" tabindex="0" role="group" aria-label="Stick plot of ion intensity against m/z. Plus and minus zoom, left and right arrows pan, 0 resets."></div>
+    <p class="legend"><span class="sw possible"></span> Possible <span id="npossible"></span>
+      <span class="sw impossible"></span> Not explained by CHNOPS <span id="nimpossible"></span>
+      <span class="muted">Wheel or drag to zoom, shift-drag to pan, double-click to reset.</span></p>
+    <details>
+      <summary>Records</summary>
+      <div class="scroll">
+        <table id="records">
+          <thead><tr><th scope="col">#</th><th scope="col">Name</th><th scope="col">Ions</th><th scope="col">Impossible</th><th scope="col">Status</th><th scope="col"><span class="sr">Plot</span></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </details>
+    <details>
+      <summary>Ions of the plotted record</summary>
+      <div class="scroll">
+        <table id="table">
+          <thead><tr><th scope="col">m/z</th><th scope="col">Intensity</th><th scope="col">Verdict</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </details>
   </section>
-
-  <p class="caveat">Impossible means not explained by CHNOPS, singly charged, monoisotopic. Works for Orbitrap data; off by default for TTOF; not for QTOF. Ions above 1700 m/z are always reported possible.</p>
-  <p class="muted"><a href="/docs">API docs</a> &middot; <a href="/openapi.json">OpenAPI JSON</a></p>
 </main>
+<script src="/static/lib.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>
