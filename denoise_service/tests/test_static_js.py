@@ -173,3 +173,35 @@ def test_peak_text_sends_two_numbers_of_an_annotated_line():
            '100.5 3 4\n')
     assert js("L.peakText(P[0], P[1])", [msp, "msp"]) == \
         '181.0707 10\n85.0284 4\n100.5 3 4'
+
+
+ODD_WS = [
+    "﻿Name: a\nIonMode: P\nNum Peaks: 1\n100.5 1\n\nName: b\nIonMode: P\nNum Peaks: 1\n181.0707 2\n",
+    "Name: a\nNum Peaks: 1\n100.5 1\n\x85\nName: b\n3 4\n",
+    "Name: a\n100.5 1\n\x1c\n\nName: b\n3 4\n",
+    "Name: a\n100.5 1\n﻿\n\nName: b\n3 4\n",
+    "Name: a\n100.5\x851\n\n\x1f\nName: b\n3 4\n",
+    "1:2 3:4\n\x85\n5:6 7:8\n",
+    "BEGIN IONS\n1 2\nEND IONS\n\x1c\nBEGIN IONS\n3 4\nEND IONS\n",
+    "\x85Name: a\n1 2\n", "\x1cName: a\n1 2\n",
+]
+
+
+@needs_node
+def test_js_and_python_agree_on_bom_nel_and_fs_boundaries():
+    for t in ODD_WS:
+        s = t[1:] if t.startswith("﻿") else t
+        kind = js("L.detectKind(P)", t)
+        assert kind == cv.detect_format(s), repr(t)
+        py = [r.raw for r in cv.split_records(s, kind)]
+        assert js("L.splitRecords(P[0], P[1])", [t, kind]) == py, repr(t)
+
+
+@needs_node
+def test_bom_msp_is_chunked_like_the_server_records():
+    text = many_msp(9)
+    bom = "﻿" + text
+    chunks = js("L.splitIntoChunks(P, 300, 2)", bom)
+    assert "".join(chunks) == text and len(chunks) > 3
+    assert all(c.startswith("Name: rec") for c in chunks)
+    assert js("L.splitIntoChunks(P, 300, 2)", text) == chunks

@@ -4,16 +4,31 @@
    server's records end; a test compares the two. */
 (function (root) {
   var LINE = /[^\r\n]*(?:\r\n|\n|\r)|[^\r\n]+/g;
-  var TOKEN = /[^\s;,]+/g;
-  var NUM_PEAKS = /^\s*num[ _-]?peaks\s*:/i;
+  /* Python's str.strip()/\s set (JS's \s and trim() differ: they include U+FEFF, and lack U+001C-001F
+     and U+0085). Used everywhere so both sides agree on blank lines and record boundaries. */
+  var WS = "\\t\\n\\v\\f\\r \\x1c-\\x1f\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000";
+  var TOKEN = new RegExp("[^" + WS + ";,]+", "g");
+  var NUM_PEAKS = new RegExp("^[" + WS + "]*num[ _-]?peaks[" + WS + "]*:", "i");
+  var NAME_LINE = new RegExp("^name[" + WS + "]*:", "i");
+  var WS_CHAR = new RegExp("^[" + WS + "]$");
+
+  function strip(s) {
+    var a = 0, b = s.length;
+    while (a < b && WS_CHAR.test(s.charAt(a))) a++;
+    while (b > a && WS_CHAR.test(s.charAt(b - 1))) b--;
+    return s.slice(a, b);
+  }
+  function stripBom(text) { return text.charAt(0) === "\ufeff" ? text.slice(1) : text; }
   var NONFINITE_PEAK = /^[+-]?(?:nan|inf|infinity):/i;
+
+  var PAIRISH = new RegExp("^[^:" + WS + "]+:[^:" + WS + "]+$");
 
   function splitLines(text) { return text.match(LINE) || []; }
   function tokens(s) { return s.match(TOKEN) || []; }
   function isHeader(s) { return /^\p{L}/u.test(s) && s.indexOf(":") >= 0 && !NONFINITE_PEAK.test(s); }
   function isPairLine(s) {
     var t = tokens(s);
-    return t.length > 0 && t.every(function (x) { return /^[^:\s]+:[^:\s]+$/.test(x); });
+    return t.length > 0 && t.every(function (x) { return PAIRISH.test(x); });
   }
 
   function byteLen(s) {
@@ -23,9 +38,10 @@
 
   /* "msp" | "mgf" | "strings" | "columns", the same rule as the server. */
   function detectKind(text) {
-    var lines = splitLines(text).map(function (l) { return l.trim(); }).filter(Boolean);
+    text = stripBom(text);
+    var lines = splitLines(text).map(function (l) { return strip(l); }).filter(Boolean);
     if (lines.some(function (l) { return l.toUpperCase() === "BEGIN IONS"; })) return "mgf";
-    if (lines.some(function (l) { return /^name\s*:/i.test(l) || NUM_PEAKS.test(l); })) return "msp";
+    if (lines.some(function (l) { return NAME_LINE.test(l) || NUM_PEAKS.test(l); })) return "msp";
     if (lines.length && lines.every(isPairLine)) {
       if (lines.length === 1 || lines.some(function (l) { return tokens(l).length > 1; })) return "strings";
     }
@@ -44,6 +60,7 @@
 
   /* Records of `text` as strings; their concatenation is the input. */
   function splitRecords(text, kind) {
+    text = stripBom(text);
     var lines = splitLines(text), groups = [], lead = [];
     function start() { var g = lead.splice(0, lead.length); groups.push(g); return g; }
     function put(line) { if (groups.length) groups[groups.length - 1].push(line); else lead.push(line); }
@@ -51,23 +68,23 @@
     if (kind === "mgf") {
       var inside = false;
       for (i = 0; i < lines.length; i++) {
-        s = lines[i].trim();
+        s = strip(lines[i]);
         if (s.toUpperCase() === "BEGIN IONS") { start(); inside = true; }
         else if (s.toUpperCase() === "END IONS") inside = false;
         groups.length ? groups[groups.length - 1].push(lines[i]) : lead.push(lines[i]);
       }
     } else if (kind === "strings") {
       for (i = 0; i < lines.length; i++) {
-        s = lines[i].trim();
+        s = strip(lines[i]);
         if (s) start().push(lines[i]); else put(lines[i]);
       }
     } else {
       var cur = null, hasPeaks = false, hasName = false, blankAfterPeak = false;
       for (i = 0; i < lines.length; i++) {
-        s = lines[i].trim();
+        s = strip(lines[i]);
         k = lineKind(s, kind, false);
         if (kind === "msp" && k === "h") {
-          var isName = /^name\s*:/i.test(s);
+          var isName = NAME_LINE.test(s);
           if (cur && ((hasPeaks && (blankAfterPeak || isName)) || (isName && hasName))) cur = null;
           if (!cur) { cur = start(); hasPeaks = hasName = blankAfterPeak = false; }
           hasName = hasName || isName;
@@ -121,7 +138,7 @@
   function peakText(raw, kind) {
     var inside = false, out = [];
     splitLines(raw).forEach(function (line) {
-      var s = line.trim(), u = s.toUpperCase();
+      var s = strip(line), u = s.toUpperCase();
       if (kind === "mgf") {
         if (u === "BEGIN IONS") { inside = true; return; }
         if (u === "END IONS") { inside = false; return; }
@@ -202,7 +219,7 @@
     return out;
   }
 
-  var api = { byteLen: byteLen, detectKind: detectKind, splitRecords: splitRecords,
+  var api = { stripBom: stripBom, byteLen: byteLen, detectKind: detectKind, splitRecords: splitRecords,
               packRanges: packRanges, splitIntoChunks: splitIntoChunks, peakText: peakText,
               cleanedFilename: cleanedFilename,
               outputFilename: outputFilename, partialNote: partialNote,

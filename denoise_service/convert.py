@@ -417,6 +417,8 @@ def join_records(records_text: List[str], original_text: str, fmt: str) -> str:
 
 def prepare(text: str, default_mode: Optional[str], default_precursor: Optional[float],
             max_peaks: int, max_batch: int, fmt: Optional[str] = None) -> Prepared:
+    if text.startswith("\ufeff"):  # a byte-order mark is not part of the first line
+        text = text[1:]
     fmt = fmt or detect_format(text)
     if fmt not in FORMATS:
         raise ConvertLimitError("format: must be one of msp, mgf, strings, columns")

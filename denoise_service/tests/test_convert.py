@@ -271,3 +271,12 @@ def test_annotated_lines_do_not_change_plain_line_behaviour():
 def test_annotation_with_bad_numbers_still_errors():
     res = run('Name: a\nNum Peaks: 1\n-5 10 "x"\n')
     assert res.records[0]["error"]
+
+
+def test_leading_bom_is_stripped_before_detection_and_parsing():
+    text = "﻿Name: a\nIonMode: P\nNum Peaks: 2\n181.0707 1\n100.5 3\n"
+    res = run(text, default_mode=None)
+    assert res.format == "msp"
+    assert res.text == "Name: a\nIonMode: P\nNum Peaks: 1\n181.0707 1\n"
+    assert res.records[0]["name"] == "a" and res.records[0]["error"] is None
+    assert cv.convert("﻿1:2 3:4", everything, default_mode="pos").format == "strings"

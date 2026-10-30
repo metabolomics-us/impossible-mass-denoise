@@ -352,7 +352,7 @@ def create_app(config: Config) -> FastAPI:
         if req.precursor_mz is not None and not (math.isfinite(req.precursor_mz)
                                                  and req.precursor_mz > 0):
             raise ApiError(422, "precursor_mz: must be a finite number greater than zero")
-        if not req.text.strip():
+        if not req.text.lstrip("\ufeff").strip():
             raise ApiError(422, "text: no spectrum found")
         lookups = (req.deuterium + 1) * (req.carbon13 + 1) * (req.nitrogen15 + 1)
         default_precursor = None if req.precursor_mz is None else float(req.precursor_mz)
