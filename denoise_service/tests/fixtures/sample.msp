@@ -1,0 +1,14 @@
+Name: A
+IonMode: Positive
+PrecursorMZ: 200.5
+Num Peaks: 4
+181.0707	100
+100.5	20
+123.9	5
+85.0284	40
+
+Name: B
+Ion_mode: negative
+Num Peaks: 2
+181.0707 100
+85.0284 40
