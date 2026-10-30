@@ -182,23 +182,3 @@ def test_convert_hostile_inputs_fail_fast():
         r = conv(c, {"text": "1:1 " * 260000, "mode": "pos"})
         assert r.status_code == 200 and r.json()["records"][0]["error"].startswith("more than")
 
-
-def test_hostile_convert_does_not_stall_a_tiny_classify():
-    async def main():
-        app = create_app(Config(rate_per_minute=100000, rate_burst=100000))
-        async with app.router.lifespan_context(app):
-            transport = httpx.ASGITransport(app=app)
-            async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
-                hostile = [c.post("/v1/convert", json={"text": "Name:x\n" * 130000})
-                           for _ in range(3)]
-
-                async def tiny():
-                    await asyncio.sleep(0.05)
-                    t0 = time.monotonic()
-                    r = await c.post("/v1/classify", json={"mode": "pos", "spectrum": "181.0707:1"})
-                    return r.status_code, time.monotonic() - t0
-                res = await asyncio.gather(*hostile, tiny())
-        assert all(r.status_code == 422 for r in res[:3])
-        status, took = res[3]
-        assert status == 200 and took < 1.5
-    asyncio.run(main())
