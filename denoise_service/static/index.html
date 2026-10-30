@@ -14,11 +14,17 @@
 </header>
 <main>
   <form id="form" novalidate>
-    <label for="spectrum">Spectrum (m/z:intensity pairs, one pair per line or space separated)</label>
+    <label for="spectrum">Spectra: paste text or load a file (MSP, MGF, or one mz:intensity string per line)</label>
     <textarea id="spectrum" rows="8" spellcheck="false" placeholder="86.06:45 104.11:100 ..."></textarea>
 
+    <div class="row">
+      <label class="filebtn" for="file">Load a file (.msp .mgf .txt)</label>
+      <input type="file" id="file" accept=".msp,.mgf,.txt,text/plain">
+      <span id="filename" class="muted"></span>
+    </div>
+
     <fieldset>
-      <legend>Polarity</legend>
+      <legend>Polarity (used when a record does not say)</legend>
       <label class="inline"><input type="radio" name="mode" value="neg"> neg</label>
       <label class="inline"><input type="radio" name="mode" value="pos"> pos</label>
     </fieldset>
@@ -29,17 +35,26 @@
         <input type="text" inputmode="decimal" id="precursor" size="10"></label>
     </div>
 
-    <button type="submit" id="go">Classify</button>
+    <button type="submit" id="go">Clean</button>
+    <button type="button" id="cancel" class="secondary" hidden>Cancel</button>
+    <p id="progress" class="muted" role="status" aria-live="polite"></p>
     <p id="message" role="alert" class="message" hidden></p>
   </form>
 
   <section id="result" aria-live="polite" hidden>
     <p id="summary" class="summary"></p>
-    <div id="plot"></div>
     <div class="actions">
+      <button type="button" id="download" class="secondary">Download cleaned</button>
+      <button type="button" id="copycleaned" class="secondary">Copy cleaned</button>
       <button type="button" id="copy" class="secondary">Copy as JSON</button>
       <span id="copystatus" class="muted"></span>
     </div>
+    <p id="plotinfo" class="muted"></p>
+    <div id="plot"></div>
+    <table id="records">
+      <thead><tr><th scope="col">#</th><th scope="col">Name</th><th scope="col">Ions</th><th scope="col">Impossible</th><th scope="col">Status</th><th scope="col"><span class="sr">Plot</span></th></tr></thead>
+      <tbody></tbody>
+    </table>
     <table id="table">
       <thead><tr><th scope="col">m/z</th><th scope="col">Intensity</th><th scope="col">Verdict</th></tr></thead>
       <tbody></tbody>
@@ -49,6 +64,7 @@
   <p class="caveat">Impossible means not explained by CHNOPS, singly charged, monoisotopic. Works for Orbitrap data; off by default for TTOF; not for QTOF. Ions above 1700 m/z are always reported possible.</p>
   <p class="muted"><a href="/docs">API docs</a> &middot; <a href="/openapi.json">OpenAPI JSON</a></p>
 </main>
+<script src="/static/lib.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

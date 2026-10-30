@@ -1,0 +1,140 @@
+"""lib.js (pure page helpers) under node, plus structural checks on the page that load it."""
+import json
+import random
+import re
+import shutil
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from denoise_service import convert as cv
+
+STATIC = Path(__file__).resolve().parent.parent / "static"
+FIX = Path(__file__).resolve().parent / "fixtures"
+needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+
+
+def js(expr, payload=None):
+    """Evaluate a JS expression with `L` (lib.js) and `P` (the JSON payload); return its JSON."""
+    script = ("const L=require(%s);const P=JSON.parse(require('fs').readFileSync(0,'utf8'));"
+              "process.stdout.write(JSON.stringify(%s));" % (json.dumps(str(STATIC / "lib.js")), expr))
+    out = subprocess.run(["node", "-e", script], input=json.dumps(payload), capture_output=True,
+                         text=True, check=True)
+    return json.loads(out.stdout)
+
+
+def many_msp(n, crlf=False):
+    nl = "\r\n" if crlf else "\n"
+    parts = []
+    for i in range(n):
+        parts.append(nl.join(["Name: rec%d" % i, "IonMode: Positive", "Num Peaks: 2",
+                              "181.0707 100", "100.5 20", "", ""]))
+    return "".join(parts).rstrip("\r\n")
+
+
+@needs_node
+@pytest.mark.parametrize("crlf", [False, True])
+def test_chunks_never_split_a_record(crlf):
+    text = many_msp(25, crlf)
+    chunks = js("L.splitIntoChunks(P, 400, 4)", text)
+    assert len(chunks) > 3
+    for c in chunks:
+        assert c.startswith("Name: rec")
+        assert len(cv.split_records(c, "msp")) <= 4
+    strings = "\n".join("181.0707:100 100.5:20 85.0284:%d" % i for i in range(30))
+    chunks = js("L.splitIntoChunks(P, 200, 100)", strings)
+    assert len(chunks) > 3 and all(len(c.strip().split("\n")) >= 1 for c in chunks)
+    assert all(not c.startswith("\n") for c in chunks)
+
+
+@needs_node
+def test_chunks_concatenate_to_input():
+    texts = [many_msp(40), many_msp(7, True), (FIX / "sample.mgf").read_text() * 9,
+             "\n\n" + many_msp(5) + "\n\n\n", (FIX / "sample.strings.txt").read_text(),
+             "181.0707 100\n100.5 20\n", "   \n", ""]
+    for t in texts:
+        for mb, mr in ((300, 3), (10 ** 6, 100), (1, 1)):
+            assert "".join(js("L.splitIntoChunks(P[0], P[1], P[2])", [t, mb, mr])) == t
+
+
+@needs_node
+def test_js_records_match_python_split_records():
+    rnd = random.Random(7)
+    samples = [(FIX / "sample.msp").read_text(), (FIX / "sample.mgf").read_text(),
+               (FIX / "sample.strings.txt").read_text(), many_msp(6, True), "100 1\n200 2\n",
+               "Name: a\n1 2\n3 4\nComment: x\n\n\nName: b\nNum Peaks: 0\n\nName: c\n5 6",
+               "\n\nBEGIN IONS\nTITLE=a\n1 2\nEND IONS\n# tail\nBEGIN IONS\n3 4\nEND IONS"]
+    for _ in range(20):
+        lines = []
+        for _ in range(rnd.randint(1, 12)):
+            lines.append(rnd.choice(["Name: n", "Num Peaks: 1", "181.0707 100", "", "x:1 y", "5:6 7:8"]))
+        samples.append("\n".join(lines) + rnd.choice(["", "\n"]))
+    for t in samples:
+        kind = js("L.detectKind(P)", t)
+        assert kind == cv.detect_format(t), t
+        py = [r.raw for r in cv.split_records(t, kind)]
+        assert js("L.splitRecords(P[0], P[1])", [t, kind]) == py, (kind, t)
+
+
+@needs_node
+def test_filename_for_cleaned_download():
+    f = lambda n, fmt: js("L.cleanedFilename(P[0], P[1])", [n, fmt])  # noqa: E731
+    assert f("sample.msp", "msp") == "sample.cleaned.msp"
+    assert f("my.data.mgf", "mgf") == "my.data.cleaned.mgf"
+    assert f("notes", "strings") == "notes.cleaned.txt"
+    assert f("", "msp") == "cleaned.msp" and f(None, "columns") == "cleaned.txt"
+
+
+@needs_node
+def test_zoom_range_keeps_center_and_clamps():
+    b = {"lo": 0, "hi": 1000}
+    r = js("L.zoomRange(P[0], P[1], P[2], P[3])", [{"lo": 100, "hi": 200}, 0.5, 150, b])
+    assert r == {"lo": 125, "hi": 175}
+    r = js("L.zoomRange(P[0], P[1], P[2], P[3])", [{"lo": 100, "hi": 200}, 0.5, 100, b])
+    assert r["lo"] == 100 and r["hi"] == 150  # the point under the cursor stays put
+    r = js("L.zoomRange(P[0], P[1], P[2], P[3])", [{"lo": 100, "hi": 200}, 100, 150, b])
+    assert r == b  # cannot zoom out past the data
+    r = js("L.zoomRange(P[0], P[1], P[2], P[3])", [{"lo": 0, "hi": 100}, 2, 0, b])
+    assert r == {"lo": 0, "hi": 200}
+    r = js("L.panRange(P[0], P[1], P[2])", [{"lo": 900, "hi": 1000}, 50, b])
+    assert r == {"lo": 900, "hi": 1000}
+    r = js("L.panRange(P[0], P[1], P[2])", [{"lo": 100, "hi": 200}, -150, b])
+    assert r == {"lo": 0, "hi": 100}
+    ticks = js("L.niceTicks(P[0], P[1], 6)", [0, 100])
+    assert ticks[0] == 0 and ticks[-1] == 100 and len(ticks) <= 12
+
+
+@needs_node
+def test_detect_kind_matches_server_formats():
+    cases = ["Name: a\n1 2", "BEGIN IONS\n1 2\nEND IONS", "1:2 3:4", "1:2\n3:4", "1 2\n3 4",
+             "1:2 3:4\n5:6", "Num Peaks: 3\n1 2", "abc:def ghi:jkl", ""]
+    for t in cases:
+        assert js("L.detectKind(P)", t) == cv.detect_format(t), t
+
+
+@needs_node
+def test_peak_text_keeps_only_peaks():
+    mgf = "BEGIN IONS\nTITLE=a: b\nPEPMASS=1\n181.0707 100 2+\n85.0284 3\nEND IONS\n"
+    assert js("L.peakText(P[0], P[1])", [mgf, "mgf"]) == "181.0707 100\n85.0284 3"
+    msp = "Name: a:b\nNum Peaks: 1\n181.0707\t100\n"
+    assert js("L.peakText(P[0], P[1])", [msp, "msp"]) == "181.0707\t100"
+
+
+def test_index_html_loads_lib_before_app_and_has_no_inline_code():
+    html = (STATIC / "index.html").read_text()
+    assert html.index('src="/static/lib.js"') < html.index('src="/static/app.js"')
+    for m in re.finditer(r"<script\b([^>]*)>", html):
+        assert "src=" in m.group(1), "inline script"
+    assert "<style" not in html and not re.search(r"\sstyle\s*=", html)
+    assert not re.search(r"\son[a-z]+\s*=", html)
+
+
+def test_lib_js_served_with_page_headers():
+    from fastapi.testclient import TestClient
+    from denoise_service.app import create_app
+    from denoise_service.config import Config
+    with TestClient(create_app(Config())) as c:
+        r = c.get("/static/lib.js")
+        assert r.status_code == 200 and "javascript" in r.headers["content-type"]
+        assert r.headers["content-security-policy"].startswith("default-src 'self'")

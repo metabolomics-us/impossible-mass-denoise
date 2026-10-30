@@ -41,6 +41,7 @@ def test_convert_msp_end_to_end(client):
     a, b = body["records"]
     assert (a["name"], a["total"], a["impossible"], a["error"]) == ("A", 4, 2, None)
     assert (b["name"], b["total"], b["error"]) == ("B", 1, None)
+    assert (a["mode"], b["mode"]) == ("pos", "neg")
     assert "Num Peaks: 2\n181.0707 100\n85.0284 40\n" in body["text"]
     assert "100.5" not in body["text"].split("Name: B")[0]
     assert body["summary"]["records"] == 2 and body["summary"]["impossible"] >= 2

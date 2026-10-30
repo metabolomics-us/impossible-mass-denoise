@@ -407,7 +407,8 @@ def apply(prep: Prepared, classify: Callable[[List[Tuple[float, float]], str, Op
                     err, out, removed = "classification failed", rec.raw, 0
         texts.append(out)
         info.append({"index": rec.index, "name": rec.name, "total": len(rec.peaks),
-                     "impossible": removed, "error": err})
+                     "impossible": removed, "error": err, "mode": rec.mode,
+                     "precursor_mz": rec.precursor_mz})
         if err:
             passed += 1
         else:
