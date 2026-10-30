@@ -158,8 +158,7 @@ def _metadata(rec: Record) -> None:
         rec.mode = charge_mode
 
 
-def _line_units(body: str, per_line: bool
-                ) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str, float, float]]]:
+def _line_units(body: str) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str, float, float]]]:
     """Units of one peak line as ([(prefix, text)], [(mz_tok, int_tok, mz, int)])."""
     toks = list(_TOKEN.finditer(body))
     units = []  # type: List[Tuple[str, str]]
@@ -174,20 +173,6 @@ def _line_units(body: str, per_line: bool
         vals.append((mz_t, in_t, mz, inten))
         prev_end = last.end()
 
-    if per_line:
-        if not toks:
-            raise SpectrumParseError("", 0, "no values")
-        first, tokens = toks[0], [t.group(0) for t in toks]
-        if ":" in tokens[0]:
-            parts = tokens[0].split(":")
-            if len(parts) != 2:
-                raise SpectrumParseError("", 0, "not an mz:intensity pair")
-            add(first, toks[-1], parts[0], parts[1])
-        elif len(tokens) >= 2:
-            add(first, toks[-1], tokens[0], tokens[1])
-        else:
-            raise SpectrumParseError("", 0, "odd number of values; last value has no partner")
-        return units, vals
     pairs = [t for t in toks if ":" in t.group(0)]
     if pairs and len(pairs) != len(toks):
         raise SpectrumParseError("", 0, "line mixes mz:intensity pairs and loose values")
@@ -211,13 +196,12 @@ def _split_ending(line: str) -> Tuple[str, str]:
 
 
 def _parse_peaks(rec: Record, max_peaks: Optional[int]) -> None:
-    per_line = rec.format == "mgf"
     for n, (line, kind) in enumerate(zip(rec.lines, rec.kinds), start=1):
         if kind != "p":
             continue
         body, _ = _split_ending(line)
         try:
-            units, vals = _line_units(body, per_line)
+            units, vals = _line_units(body)
         except SpectrumParseError as exc:
             rec.error = "%s (line %d of the record)" % (exc.reason, n)
             return

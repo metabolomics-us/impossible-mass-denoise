@@ -197,3 +197,21 @@ def test_classifier_failure_never_loses_data():
     text = "Name: A\n100.5 1\n"
     res = run(text, boom)
     assert res.text == text and res.records[0]["error"] == "classification failed"
+
+
+def test_mgf_line_with_several_pairs_judges_every_pair():
+    text = "BEGIN IONS\nIONMODE=pos\n181.0707:10 100.5:3\nEND IONS\n"
+    res = run(text)
+    assert res.text == "BEGIN IONS\nIONMODE=pos\n181.0707:10\nEND IONS\n"
+    assert (res.records[0]["total"], res.records[0]["impossible"]) == (2, 1)
+
+
+def test_mgf_loose_line_with_several_pairs_rebuilt_from_original_tokens():
+    text = "BEGIN IONS\nIONMODE=pos\n181.0707 10.0 100.5 3 85.0284 4\nEND IONS\n"
+    assert run(text).text == "BEGIN IONS\nIONMODE=pos\n181.0707 10.0 85.0284 4\nEND IONS\n"
+
+
+def test_mgf_unparseable_peak_line_passes_record_through_with_error():
+    text = "BEGIN IONS\nIONMODE=pos\n181.0707 10 100.5\nEND IONS\n"
+    res = run(text)
+    assert res.text == text and res.records[0]["error"]
