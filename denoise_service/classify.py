@@ -51,7 +51,6 @@ def classify(peaks: Sequence[Tuple[float, float]], options: Options) -> Classifi
     bad = float(sum(p[1] for p, ok in zip(peaks, possible) if not ok))
     summary = {
         "total": len(possible),
-        "possible": sum(possible),
         "impossible": len(possible) - sum(possible),
         "intensity_total": total,
         "intensity_impossible": bad,

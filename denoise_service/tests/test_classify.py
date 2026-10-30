@@ -65,7 +65,8 @@ def test_summary_numbers():
     peaks = [(POSSIBLE_NEG, 30.0), (IMPOSSIBLE_NEG, 10.0), (POSSIBLE_NEG, 60.0)]
     s = classify(peaks, Options(mode="neg")).summary
     assert s["total"] == 3
-    assert s["possible"] == 2
+    assert set(s) == {"total", "impossible", "intensity_total", "intensity_impossible",
+                      "intensity_impossible_fraction"}
     assert s["impossible"] == 1
     assert s["intensity_total"] == pytest.approx(100.0)
     assert s["intensity_impossible"] == pytest.approx(10.0)
