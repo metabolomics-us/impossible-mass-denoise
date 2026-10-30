@@ -355,6 +355,10 @@ from the request. A record that cannot be cleaned (no ion mode, unparseable, ove
 returned unchanged with a short `error` in its `records` entry; the request still succeeds. Each
 `records` entry is `{index, name, total, impossible, error, mode, precursor_mz}`.
 
+Annotated peak lines such as `181.07 10 "C6H13O6+"` (NIST and MassBank style: m/z, intensity, then
+annotation text, quoted or bare) are supported only in MSP and MGF records. Each is one peak and is kept
+or removed whole, annotation included; `/v1/classify` does not accept annotations.
+
 The public URL is https://denoise.metabolomics.us. Deployment (nginx, DNS, the systemd unit) is in
 [ops/deploy/README.md](ops/deploy/README.md). The service imports Ziyue's modules unmodified.
 

@@ -173,12 +173,37 @@ def _metadata(rec: Record) -> None:
         rec.mode = charge_mode
 
 
+def _is_num(tok: str) -> bool:
+    try:
+        _number(tok, 0)
+    except SpectrumParseError:
+        return False
+    return True
+
+
+def _is_annotated(head) -> bool:
+    """First two tokens are numbers and the third is text (not a number or a numeric pair)."""
+    a, b, c = (m.group(0) for m in head)
+    if not (_is_num(a) and _is_num(b)) or _is_num(c):
+        return False
+    parts = c.split(":")
+    return not (len(parts) == 2 and _is_num(parts[0]) and _is_num(parts[1]))
+
+
 class _OverCap(Exception):
     """A peak line holds more tokens than the peak cap could ever allow."""
 
 
 def _line_units(body: str, room: Optional[int] = None) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str, float, float]]]:
     """Units of one peak line as ([(prefix, text)], [(mz_tok, int_tok, mz, int)])."""
+    head = list(islice(_TOKEN.finditer(body), 3))
+    if len(head) == 3 and _is_annotated(head):
+        # "mz intensity annotation...": ONE peak; the whole original line is kept or removed.
+        first, mz_t, in_t = head[0], head[0].group(0), head[1].group(0)
+        mz, inten = _number(mz_t, 0), _number(in_t, 0)
+        _peak(mz, inten, "", 0)
+        return [(body[:first.start()], body[first.start():_last_end(body)])], \
+            [(mz_t, in_t, mz, inten)]
     # Tokenise lazily: past 2*room+2 tokens the line has more than `room` peaks (or is invalid
     # anyway), so a hostile single line is never expanded in full.
     if room is None:
@@ -245,10 +270,11 @@ def _parse_peaks(rec: Record, max_peaks: Optional[int]) -> None:
 
 
 def _last_end(body: str) -> int:
-    last = None
-    for last in _TOKEN.finditer(body):
-        pass
-    return last.end() if last else len(body)
+    """End of the last token (what follows is only separators and whitespace)."""
+    i = len(body)
+    while i and (body[i - 1].isspace() or body[i - 1] in ";,"):
+        i -= 1
+    return i
 
 
 def _kind_msp(stripped: str) -> str:

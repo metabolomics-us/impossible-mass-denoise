@@ -165,3 +165,11 @@ def test_partial_download_name_and_summary():
     note = js("L.partialNote(P[0], P[1])", [3, 10])
     assert "3 of 10" in note and "missing" in note
     assert js("L.partialNote(P[0], P[1])", [0, 10]) == ""
+
+
+@needs_node
+def test_peak_text_sends_two_numbers_of_an_annotated_line():
+    msp = ('Name: a\nNum Peaks: 2\n181.0707\t10\t"C6H13O6+"\n85.0284 4 bare words here\n'
+           '100.5 3 4\n')
+    assert js("L.peakText(P[0], P[1])", [msp, "msp"]) == \
+        '181.0707 10\n85.0284 4\n100.5 3 4'

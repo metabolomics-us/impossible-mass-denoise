@@ -239,3 +239,35 @@ def test_peak_line_stops_tokenising_past_max_peaks(monkeypatch):
         assert res.records[0]["error"] == "more than 5 peaks"
         assert res.text == text
         assert len(seen) < 100
+
+
+NIST = ("Name: Glucose\nIonMode: Positive\nPrecursorMZ: 181.0707\nNum Peaks: 4\n"
+        '181.0707\t10\t"C6H13O6+/-0.5ppm"\n100.5\t3\t"unknown"\n'
+        '85.0284 4 "C4H5O2+ loss of 96"\n123.9\t7\t"x"\n')
+
+
+def test_msp_annotated_peak_lines_are_one_peak_each():
+    res = run(NIST)
+    assert res.text == ("Name: Glucose\nIonMode: Positive\nPrecursorMZ: 181.0707\nNum Peaks: 2\n"
+                        '181.0707\t10\t"C6H13O6+/-0.5ppm"\n85.0284 4 "C4H5O2+ loss of 96"\n')
+    assert (res.records[0]["total"], res.records[0]["impossible"], res.records[0]["error"]) \
+        == (4, 2, None)
+
+
+def test_msp_annotated_bare_text_and_crlf_and_all_kept_identity():
+    text = ("Name: M\r\nIon_mode: P\r\nNum Peaks: 2\r\n181.0707 10 C6H13O6 1.2ppm\r\n"
+            "85.0284 4 \"x\"\r\n")
+    assert run(text).text == text
+    res = run(text, fn=lambda p, m, x: [False] * len(p))
+    assert res.text == "Name: M\r\nIon_mode: P\r\nNum Peaks: 0\r\n"
+
+
+def test_annotated_lines_do_not_change_plain_line_behaviour():
+    assert run("Name: a\nNum Peaks: 1\n181.0707 10 100.5\n").records[0]["error"]
+    assert run("Name: a\nNum Peaks: 1\n181.0707 10 100.5:3\n").records[0]["error"]
+    assert run("Name: a\nNum Peaks: 1\n181.0707 10 abc\n").records[0]["error"] is None
+
+
+def test_annotation_with_bad_numbers_still_errors():
+    res = run('Name: a\nNum Peaks: 1\n-5 10 "x"\n')
+    assert res.records[0]["error"]

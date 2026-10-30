@@ -108,6 +108,15 @@
     });
   }
 
+  var NUMBER = /^[+-]?(?:(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?|nan|inf|infinity)$/i;
+  function isNum(t) { return t.length <= 64 && NUMBER.test(t); }
+  /* "mz intensity annotation...": two numbers then text; one peak, as on the server. */
+  function isAnnotated(t) {
+    if (t.length < 3 || !isNum(t[0]) || !isNum(t[1]) || isNum(t[2])) return false;
+    var p = t[2].split(":");
+    return !(p.length === 2 && isNum(p[0]) && isNum(p[1]));
+  }
+
   /* Only the peak lines of one record, in a form /v1/classify accepts. */
   function peakText(raw, kind) {
     var inside = false, out = [];
@@ -119,7 +128,7 @@
       }
       if (lineKind(s, kind, inside) !== "p") return;
       var t = tokens(s);
-      out.push(kind === "mgf" && t[0].indexOf(":") < 0 ? t.slice(0, 2).join(" ") : s);
+      out.push(isAnnotated(t) ? t.slice(0, 2).join(" ") : s);
     });
     return out.join("\n");
   }
