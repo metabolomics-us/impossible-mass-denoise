@@ -14,6 +14,7 @@ import contextlib
 import logging
 import math
 import time
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -21,6 +22,8 @@ import orjson
 from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, StrictBool, StrictInt, StrictFloat, StrictStr
 from pydantic import ValidationError
 
@@ -203,7 +206,7 @@ def create_app(config: Config) -> FastAPI:
             state["executor"].shutdown(wait=True)
 
     app = FastAPI(title="denoise service", lifespan=lifespan,
-                  docs_url=None, redoc_url=None, openapi_url=None)
+                  docs_url="/docs", redoc_url=None, openapi_url="/openapi.json")
     app.add_middleware(CORSMiddleware, allow_origins=config.cors_origins,
                        allow_methods=["GET", "POST", "OPTIONS"], allow_headers=["*"],
                        allow_credentials=False)
@@ -310,5 +313,14 @@ def create_app(config: Config) -> FastAPI:
         first = errs[0] if errs else {}
         loc = ".".join(str(p) for p in first.get("loc", ()))
         return _json(422, {"detail": "%s: %s" % (loc or "request", first.get("msg", "invalid"))})
+
+    # Registered last so the page and its assets can never shadow an API route.
+    static_dir = Path(__file__).resolve().parent / "static"
+
+    @app.get("/", include_in_schema=False)
+    async def index() -> Response:
+        return FileResponse(static_dir / "index.html", media_type="text/html")
+
+    app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
     return app
