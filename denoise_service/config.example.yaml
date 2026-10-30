@@ -1,0 +1,56 @@
+# Example configuration for the denoise service. Start with:
+#   python -m denoise_service --config config.example.yaml
+# Every key is shown with its default. Unknown keys fail startup.
+# No environment variables are read; this file is the only configuration.
+
+# Address to bind. Keep 127.0.0.1 when a reverse proxy fronts the service.
+host: 127.0.0.1
+
+# TCP port to listen on (1-65535).
+port: 8300
+
+# Most peaks accepted in one spectrum; larger spectra are rejected.
+max_peaks: 5000
+
+# Most spectra accepted in one batch request.
+max_batch: 200
+
+# Largest request body in bytes (1048576 = 1 MiB); larger bodies are rejected.
+max_body_bytes: 1048576
+
+# Largest value for any single isotope label count (deuterium, carbon13, nitrogen15).
+max_label: 12
+
+# Cap on the label lookup product (d+1)*(c+1)*(n+1); bounds work per request.
+max_label_lookups: 200
+
+# Total work allowed in one request: the sum over its spectra of peaks x (d+1)(c+1)(n+1).
+max_request_lookups: 200000
+
+# Most classify requests queued or running at once; further ones get 503 with Retry-After.
+max_pending: 8
+
+# Most classify jobs one client (same key as the rate limiter) may have queued or running;
+# more get 429 with Retry-After.
+max_inflight_per_client: 4
+
+# The formula cache is cleared after any job that leaves more than this many entries, so a
+# hostile request cannot grow it without bound (about 200 bytes per entry).
+max_cache_entries: 200000
+
+# Sustained requests per minute allowed per client.
+rate_per_minute: 120
+
+# Burst capacity: requests a client may make at once before being throttled.
+rate_burst: 30
+
+# Seconds between clears of the formula cache, so it cannot grow without bound.
+cache_clear_seconds: 3600
+
+# Trust X-Forwarded-For from the reverse proxy to identify clients for rate limiting.
+# Set false if the service is exposed directly, otherwise clients could spoof their address.
+trusted_proxy: true
+
+# Origins allowed by CORS. "*" allows any website to call the API from a browser.
+cors_origins:
+  - "*"

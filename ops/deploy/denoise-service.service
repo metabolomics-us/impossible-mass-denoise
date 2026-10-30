@@ -1,0 +1,20 @@
+[Unit]
+Description=Impossible-mass denoise service (REST API and web page)
+After=network.target
+
+[Service]
+Type=simple
+User=denoise
+Group=denoise
+WorkingDirectory=/opt/denoise-service/app
+ExecStart=/opt/denoise-service/venv/bin/python -B -m denoise_service --config /etc/denoise-service/config.yaml
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target

@@ -40,3 +40,10 @@ steps:
       - 'test -n "$(git ls-files)" || { echo "repo has no tracked files" >&2; exit 1; }'
       - 'echo "tracked files: $(git ls-files | wc -l)"'
       - 'bash ops/ci/test_smoke.sh'
+
+  - name: service-gate
+    image: bash
+    commands:
+      - 'set -eu'
+      - 'echo "repo: ${CI_REPO} @ ${CI_COMMIT_SHA} (branch ${CI_COMMIT_BRANCH:-main})"'
+      - 'bash ops/ci/test_service.sh'

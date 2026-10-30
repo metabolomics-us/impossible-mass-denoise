@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#022851">
+<title>Impossible-mass denoise</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="site">
+  <h1>Impossible-mass denoise</h1>
+  <p class="sub">West Coast Metabolomics Center &middot; UC Davis</p>
+</header>
+<main>
+  <form id="form" novalidate>
+    <label for="spectrum">Spectrum (m/z:intensity pairs, one pair per line or space separated)</label>
+    <textarea id="spectrum" rows="8" spellcheck="false" placeholder="86.06:45 104.11:100 ..."></textarea>
+
+    <fieldset>
+      <legend>Polarity</legend>
+      <label class="inline"><input type="radio" name="mode" value="neg"> neg</label>
+      <label class="inline"><input type="radio" name="mode" value="pos"> pos</label>
+    </fieldset>
+
+    <div class="row">
+      <label class="inline"><input type="checkbox" id="halogens"> Allow halogens (F, Cl, Br, I)</label>
+      <label class="inline" for="precursor">Precursor m/z (optional)
+        <input type="text" inputmode="decimal" id="precursor" size="10"></label>
+    </div>
+
+    <button type="submit" id="go">Classify</button>
+    <p id="message" role="alert" class="message" hidden></p>
+  </form>
+
+  <section id="result" aria-live="polite" hidden>
+    <p id="summary" class="summary"></p>
+    <div id="plot"></div>
+    <div class="actions">
+      <button type="button" id="copy" class="secondary">Copy as JSON</button>
+      <span id="copystatus" class="muted"></span>
+    </div>
+    <table id="table">
+      <thead><tr><th scope="col">m/z</th><th scope="col">Intensity</th><th scope="col">Verdict</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <p class="caveat">Impossible means not explained by CHNOPS, singly charged, monoisotopic. Works for Orbitrap data; off by default for TTOF; not for QTOF. Ions above 1700 m/z are always reported possible.</p>
+  <p class="muted"><a href="/docs">API docs</a> &middot; <a href="/openapi.json">OpenAPI JSON</a></p>
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>
