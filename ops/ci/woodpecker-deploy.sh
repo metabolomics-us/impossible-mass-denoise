@@ -25,8 +25,8 @@ set -euo pipefail
 # CI runs on hive, where neither the name kvm-node-12 nor the 192.168.5.x fabric
 # resolves or routes; the head's public address, port 22, is reachable from there.
 HEAD_HOST=128.120.143.172
-# kvm-node-12's host key, pinned: a changed key must fail, not be learned.
-HEAD_HOSTKEY='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKdn7i4EoJY6tWfWxajjYgWos2P2/MtD+kjaerOorvGP'
+# whiteale's (kvm-node-12) ssh ed25519 host key, read on the host itself 2026-10-30; pinned: a changed key must fail, not be learned.
+HEAD_HOSTKEY='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHMt2xwn2FY7cK/wL365s/nKA8X41jyRJHRI3n9nRcwL'
 
 dir=$(mktemp -d)
 trap 'rm -rf "$dir"' EXIT
