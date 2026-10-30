@@ -22,7 +22,9 @@ set -euo pipefail
 : "${DENOISE_DEPLOY_SSH_KEY:?the deploy key secret was not released to this pipeline}"
 : "${CI_COMMIT_SHA:?}"
 
-HEAD_HOST=kvm-node-12
+# CI runs on hive, where neither the name kvm-node-12 nor the 192.168.5.x fabric
+# resolves or routes; the head's public address, port 22, is reachable from there.
+HEAD_HOST=128.120.143.172
 # kvm-node-12's host key, pinned: a changed key must fail, not be learned.
 HEAD_HOSTKEY='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKdn7i4EoJY6tWfWxajjYgWos2P2/MtD+kjaerOorvGP'
 
@@ -30,7 +32,7 @@ dir=$(mktemp -d)
 trap 'rm -rf "$dir"' EXIT
 umask 077
 printf '%s\n' "$DENOISE_DEPLOY_SSH_KEY" > "$dir/key"
-printf 'kvm-node-12,192.168.5.31 %s\n' "$HEAD_HOSTKEY" > "$dir/known_hosts"
+printf '%s %s\n' "$HEAD_HOST" "$HEAD_HOSTKEY" > "$dir/known_hosts"
 
 exec ssh -F /dev/null -i "$dir/key" -o IdentitiesOnly=yes -o BatchMode=yes \
     -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$dir/known_hosts" \
