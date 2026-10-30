@@ -9,7 +9,7 @@ Spectrum contents are never logged here; errors quote only the single bad token.
 """
 import math
 import re
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 __all__ = ["parse_spectrum", "SpectrumParseError"]
 
@@ -63,9 +63,15 @@ def _peak(mz: float, intensity: float, token: str, line_no: int) -> Tuple[float,
     return (mz, intensity)
 
 
-def parse_spectrum(text: str) -> List[Tuple[float, float]]:
+def parse_spectrum(text: str, max_peaks: Optional[int] = None) -> List[Tuple[float, float]]:
     """Return the peaks in `text` as (mz, intensity) tuples, in input order."""
     peaks = []  # type: List[Tuple[float, float]]
+
+    def full(line_no: int) -> None:
+        # Stop as soon as the cap is passed so a huge paste is not parsed in full.
+        if max_peaks is not None and len(peaks) > max_peaks:
+            raise SpectrumParseError("line %d: more than %d peaks" % (line_no, max_peaks),
+                                     line_no, "more than %d peaks" % max_peaks)
     for line_no, raw in enumerate(text.splitlines(), start=1):
         line = raw.strip()
         if not line or _is_header(line):
@@ -82,6 +88,7 @@ def parse_spectrum(text: str) -> List[Tuple[float, float]]:
                                              "not an mz:intensity pair")
                 peaks.append(_peak(_number(parts[0], line_no), _number(parts[1], line_no),
                                    token, line_no))
+                full(line_no)
             else:
                 loose.append((_number(token, line_no), token))
         if len(loose) % 2:
@@ -91,6 +98,7 @@ def parse_spectrum(text: str) -> List[Tuple[float, float]]:
         for i in range(0, len(loose), 2):
             (mz, t1), (inten, t2) = loose[i], loose[i + 1]
             peaks.append(_peak(mz, inten, "%s %s" % (t1, t2), line_no))
+            full(line_no)
     if not peaks:
         raise SpectrumParseError("no peaks found")
     return peaks

@@ -73,3 +73,16 @@ def test_very_long_token_is_rejected_quickly():
     with pytest.raises(SpectrumParseError):
         parse_spectrum("9" * 100000 + "x 5")
     assert time.monotonic() - t0 < 1.0
+
+
+def test_max_peaks_stops_early():
+    import time
+    assert len(parse_spectrum("1:1 2:1 3:1", max_peaks=3)) == 3
+    with pytest.raises(SpectrumParseError) as e:
+        parse_spectrum("1:1 2:1 3:1 4:1", max_peaks=3)
+    assert e.value.reason == "more than 3 peaks" and e.value.line == 1
+    huge = "\n".join("%d.5:1" % i for i in range(1, 100001))
+    t0 = time.monotonic()
+    with pytest.raises(SpectrumParseError):
+        parse_spectrum(huge, max_peaks=5000)
+    assert time.monotonic() - t0 < 1.0

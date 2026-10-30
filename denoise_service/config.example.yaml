@@ -25,10 +25,18 @@ max_label: 12
 max_label_lookups: 200
 
 # Total work allowed in one request: the sum over its spectra of peaks x (d+1)(c+1)(n+1).
-max_request_lookups: 1000000
+max_request_lookups: 200000
 
 # Most classify requests queued or running at once; further ones get 503 with Retry-After.
 max_pending: 8
+
+# Most classify jobs one client (same key as the rate limiter) may have queued or running;
+# more get 429 with Retry-After.
+max_inflight_per_client: 4
+
+# The formula cache is cleared after any job that leaves more than this many entries, so a
+# hostile request cannot grow it without bound (about 200 bytes per entry).
+max_cache_entries: 200000
 
 # Sustained requests per minute allowed per client.
 rate_per_minute: 120

@@ -134,7 +134,7 @@ def _validate(raw: Any, cfg: Config, where: str = "") -> Tuple[List[Tuple[float,
             raise bad("no peaks found")
     else:
         try:
-            peaks = parse_spectrum(req.spectrum or "")
+            peaks = parse_spectrum(req.spectrum or "", cfg.max_peaks)
         except SpectrumParseError as exc:
             # Line and reason only: the exception's own message quotes the posted token.
             raise bad("line %d: %s" % (exc.line, exc.reason) if exc.line else exc.reason)
@@ -157,10 +157,10 @@ def _check_budget(total: int, cfg: Config) -> None:
                        "summed over spectra)" % cfg.max_request_lookups)
 
 
-def _run(peaks: List[Tuple[float, float]], options: Options) -> Dict[str, Any]:
+def _run(peaks: List[Tuple[float, float]], options: Options, fp: str) -> Dict[str, Any]:
     result = classify_mod.classify(peaks, options)
     return {
-        "fingerprint": classify_mod.fingerprint(),
+        "fingerprint": fp,
         "mode": options.mode,
         "ions": [{"mz": mz, "intensity": float(inten), "possible": ok}
                  for (mz, inten), ok in zip(peaks, result.possible)],
@@ -172,7 +172,8 @@ def _clear_cache() -> None:
     denoise.clear_cache()
 
 
-def _check_tables() -> None:
+def _check_tables() -> str:
+    """Verify the tables and return the chemistry fingerprint (computed once per startup)."""
     for name, status in (("table", denoise.table_status()),
                          ("halogen table", denoise.halogen_table_status())):
         if not str(status).startswith("loaded"):
@@ -180,13 +181,14 @@ def _check_tables() -> None:
     got = classify_mod.fingerprint()
     if got != EXPECTED_FINGERPRINT:
         raise RuntimeError("chemistry fingerprint %s != expected %s" % (got, EXPECTED_FINGERPRINT))
+    return got
 
 
 def create_app(config: Config) -> FastAPI:
     limiter = TokenBucket(config.rate_per_minute, config.rate_burst)
 
     # One dedicated worker thread owns all classification and the denoise cache.
-    state = {"executor": None, "pending": 0}  # type: Dict[str, Any]
+    state = {"executor": None, "pending": 0, "fp": "", "clients": {}}  # type: Dict[str, Any]
 
     async def _clear_loop() -> None:
         loop = asyncio.get_event_loop()
@@ -196,7 +198,8 @@ def create_app(config: Config) -> FastAPI:
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):
-        _check_tables()
+        state["fp"] = _check_tables()
+        state["clients"] = {}
         state["executor"] = ThreadPoolExecutor(max_workers=1, thread_name_prefix="denoise-worker")
         state["pending"] = 0
         task = asyncio.ensure_future(_clear_loop())
@@ -206,13 +209,13 @@ def create_app(config: Config) -> FastAPI:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
-            state["executor"].shutdown(wait=True)
+            state["executor"].shutdown(wait=True, cancel_futures=True)
 
     app = FastAPI(title="denoise service", lifespan=lifespan,
                   docs_url="/docs", redoc_url=None, openapi_url="/openapi.json")
     app.add_middleware(CORSMiddleware, allow_origins=config.cors_origins,
                        allow_methods=["GET", "POST", "OPTIONS"], allow_headers=["*"],
-                       allow_credentials=False)
+                       allow_credentials=False, expose_headers=["Retry-After"])
 
     def client_key(request: Request) -> str:
         if config.trusted_proxy:
@@ -236,6 +239,24 @@ def create_app(config: Config) -> FastAPI:
             chunks.append(chunk)
         return b"".join(chunks)
 
+    def check_capacity(key: str) -> None:
+        # Checked before the body is read (cheap fail) and again before submitting.
+        if state["pending"] >= config.max_pending:
+            raise ApiError(503, "server busy; retry later", {"Retry-After": "1"})
+        if state["clients"].get(key, 0) >= config.max_inflight_per_client:
+            raise ApiError(429, "too many requests in progress for this client; retry later",
+                           {"Retry-After": "1"})
+
+    def capped(job):
+        # Runs on the worker thread, which owns the cache: keep it bounded after every job.
+        def run() -> Dict[str, Any]:
+            try:
+                return job()
+            finally:
+                if denoise.cache_size() > config.max_cache_entries:
+                    denoise.clear_cache()
+        return run
+
     async def handle(request: Request, work) -> Response:
         start = time.monotonic()
         ions = None  # type: Optional[int]
@@ -244,20 +265,25 @@ def create_app(config: Config) -> FastAPI:
             if not allowed:
                 raise ApiError(429, "rate limit exceeded; retry later",
                                {"Retry-After": str(max(1, int(math.ceil(wait))))})
+            key = client_key(request)
+            check_capacity(key)
             body = await read_body(request)
             try:
                 raw = orjson.loads(body)
             except orjson.JSONDecodeError:
                 raise ApiError(422, "body is not valid JSON")
             compute, ions = work(raw)
-            if state["pending"] >= config.max_pending:
-                raise ApiError(503, "server busy; retry later", {"Retry-After": "1"})
+            check_capacity(key)
             state["pending"] += 1
+            state["clients"][key] = state["clients"].get(key, 0) + 1
             try:
                 payload = await asyncio.get_event_loop().run_in_executor(
-                    state["executor"], compute)
+                    state["executor"], capped(compute))
             finally:
                 state["pending"] -= 1
+                state["clients"][key] -= 1
+                if not state["clients"][key]:
+                    del state["clients"][key]
             response = _json(200, payload)
         except ApiError as err:
             response = _json(err.status, {"detail": err.detail}, err.headers)
@@ -269,7 +295,7 @@ def create_app(config: Config) -> FastAPI:
     def classify_work(raw: Any):
         peaks, options, _ = _validate(raw, config)
         _check_budget(_work(peaks, options), config)
-        return (lambda: _run(peaks, options)), len(peaks)
+        return (lambda: _run(peaks, options, state["fp"])), len(peaks)
 
     def batch_work(raw: Any):
         if not isinstance(raw, dict) or set(raw) - {"spectra"}:
@@ -285,7 +311,7 @@ def create_app(config: Config) -> FastAPI:
         def compute() -> Dict[str, Any]:
             results = []
             for peaks, options, ident in parsed:
-                out = _run(peaks, options)
+                out = _run(peaks, options, state["fp"])
                 out["id"] = ident
                 results.append(out)
             return {"results": results}
@@ -303,7 +329,7 @@ def create_app(config: Config) -> FastAPI:
     async def healthz() -> Response:
         return _json(200, {
             "status": "ok",
-            "fingerprint": classify_mod.fingerprint(),
+            "fingerprint": state["fp"],
             "tables": {"chnops": denoise.table_status(),
                        "halogen": denoise.halogen_table_status()},
             "cache_size": denoise.cache_size(),

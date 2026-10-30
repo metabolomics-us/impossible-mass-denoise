@@ -369,3 +369,112 @@ async def test_cache_clear_runs_on_worker_thread(monkeypatch):
 @pytest.fixture
 def anyio_backend():
     return "asyncio"
+
+
+# ---- final-review wave -----------------------------------------------------------------------
+
+def test_cache_is_capped_after_a_job(monkeypatch):
+    cleared = []
+    real = denoise.clear_cache
+    monkeypatch.setattr(denoise, "clear_cache", lambda: (cleared.append(1), real())[1])
+    with TestClient(create_app(small(max_cache_entries=50))) as c:
+        peaks = [[50.123 + 7.31 * i, 1] for i in range(5)]
+        r = post(c, {"mode": "neg", "peaks": peaks, "deuterium": 3, "carbon13": 3})
+        assert r.status_code == 200
+        assert c.get("/healthz").json()["cache_size"] <= 50
+    assert cleared
+
+
+def test_fingerprint_computed_once(monkeypatch):
+    calls = []
+    real = classify_mod.fingerprint
+    monkeypatch.setattr(classify_mod, "fingerprint", lambda: (calls.append(1), real())[1])
+    with TestClient(create_app(small())) as c:
+        for _ in range(3):
+            r = post(c, {"mode": "neg", "peaks": [[86.06, 1]]})
+            assert r.json()["fingerprint"] == FINGERPRINT
+        r = post(c, {"spectra": [BODY, BODY]}, "/v1/classify/batch")
+        assert [x["fingerprint"] for x in r.json()["results"]] == [FINGERPRINT] * 2
+        assert c.get("/healthz").json()["fingerprint"] == FINGERPRINT
+    assert len(calls) <= 1
+
+
+def test_retry_after_is_exposed_to_browsers():
+    origin = {"origin": "https://example.org"}
+    with TestClient(create_app(small(rate_per_minute=1, rate_burst=1))) as c:
+        assert post(c, BODY, headers=origin).status_code == 200
+        r = post(c, BODY, headers=origin)
+        assert r.status_code == 429
+        assert "retry-after" in r.headers["access-control-expose-headers"].lower()
+
+
+@pytest.mark.anyio
+async def test_503_exposes_retry_after(slow):
+    app = create_app(small(max_pending=1, max_inflight_per_client=9))
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
+                                     base_url="http://t") as c:
+            first = asyncio.ensure_future(c.post("/v1/classify", json=BODY))
+            await _wait(slow["started"])
+            r = await c.post("/v1/classify", json=BODY, headers={"origin": "https://e.org"})
+            assert r.status_code == 503
+            assert "retry-after" in r.headers["access-control-expose-headers"].lower()
+            await first
+
+
+@pytest.mark.anyio
+async def test_503_before_body_is_parsed(slow):
+    app = create_app(small(max_pending=1, max_inflight_per_client=9))
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
+                                     base_url="http://t") as c:
+            first = asyncio.ensure_future(c.post("/v1/classify", json=BODY))
+            await _wait(slow["started"])
+            r = await c.post("/v1/classify", content=b"{not json",
+                             headers={"content-type": "application/json"})
+            assert r.status_code == 503
+            await first
+
+
+@pytest.mark.anyio
+async def test_per_client_inflight_cap(slow):
+    app = create_app(small(max_inflight_per_client=1))
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
+                                     base_url="http://t") as c:
+            a = {"x-forwarded-for": "1.1.1.1"}
+            first = asyncio.ensure_future(c.post("/v1/classify", json=BODY, headers=a))
+            await _wait(slow["started"])
+            r = await c.post("/v1/classify", json=BODY, headers=a)
+            assert r.status_code == 429 and r.headers["retry-after"] == "1"
+            assert "detail" in r.json()
+            other = asyncio.ensure_future(
+                c.post("/v1/classify", json=BODY, headers={"x-forwarded-for": "2.2.2.2"}))
+            assert (await first).status_code == 200
+            assert (await other).status_code == 200
+            # released after completion, and after a 422 path
+            assert (await c.post("/v1/classify", json=BODY, headers=a)).status_code == 200
+            assert (await c.post("/v1/classify", json={"mode": "x"}, headers=a)).status_code == 422
+            assert (await c.post("/v1/classify", json=BODY, headers=a)).status_code == 200
+
+
+def test_inflight_released_after_job_exception(monkeypatch):
+    real = classify_mod.classify
+    boom = {"on": True}
+
+    def flaky(peaks, options):
+        if boom["on"]:
+            boom["on"] = False
+            raise RuntimeError("boom")
+        return real(peaks, options)
+    monkeypatch.setattr(classify_mod, "classify", flaky)
+    with TestClient(create_app(small(max_inflight_per_client=1, max_pending=1)),
+                    raise_server_exceptions=False) as c:
+        assert post(c, BODY).status_code == 500
+        assert post(c, BODY).status_code == 200
+
+
+def test_text_parsing_stops_at_max_peaks(client):
+    text = "\n".join("%d.5:1" % i for i in range(60, 160))
+    r = post(client, {"mode": "neg", "spectrum": text})
+    assert r.status_code == 422 and "more than 5 peaks" in r.json()["detail"]
