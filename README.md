@@ -326,6 +326,25 @@ Two limits matter operationally. The benefit is concentrated on Orbitrap data; s
 the correct match and of its competitors alike, so treat it as a score improvement rather than a
 ranking improvement: it will not by itself change which candidate ranks first.
 
+## Service
+
+`denoise_service/` wraps the filter as a public REST service with a paste-and-plot web page.
+Start it with:
+
+```
+python -m denoise_service --config denoise_service/config.example.yaml
+```
+
+| Method and path | Purpose |
+| --- | --- |
+| `GET /` | Web page: paste a spectrum, see the plot |
+| `POST /v1/classify` | Classify one spectrum |
+| `POST /v1/classify/batch` | Classify several spectra |
+| `GET /healthz` | Health and chemistry fingerprint |
+
+The public URL is https://denoise.metabolomics.us. Deployment (nginx, DNS, the systemd unit) is in
+[ops/deploy/README.md](ops/deploy/README.md). The service imports Ziyue's modules unmodified.
+
 ## Provenance
 
 `impossible_mass_denoise.py` is the validated research module, unchanged except that the table path
