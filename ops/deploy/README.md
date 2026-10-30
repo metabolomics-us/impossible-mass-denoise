@@ -5,6 +5,18 @@ through nginx. Three pieces live outside this repository and need the operator: 
 the DNS record with its certificate, and the unit and config on whiteale. There are no secrets and
 no environment variables: the YAML config is the only configuration.
 
+> **Automatic deployment (current).** Production no longer follows sections 1-6 by hand. Every push
+> to `main` that passes `gate` and `service-gate` runs the `deploy` step (`ops/ci/woodpecker-deploy.sh`),
+> which asks the head `kvm-node-12` to deploy that commit to `kvm-node-7` and `kvm-node-8`. Everything
+> privileged lives in the `denoise_deploy` and `denoise_nodes` roles and the nginx vhost of
+> `metabolomics-us/fiehnlab-slurm-cluster`; its `docs/runbooks/denoise-service.md` lists the one-time
+> operator steps (certificate, roles, Warewulf overlay, GitHub deploy key, Woodpecker secret
+> `denoise_deploy_ssh_key`) and the rollback. This repo supplies data only: `requirements-service.lock`
+> (hash-pinned; regenerate with `uv pip compile requirements-service.in --python-version 3.9
+> --python-platform x86_64-manylinux_2_28 --generate-hashes --only-binary :all: -o requirements-service.lock`)
+> and `ops/deploy/smoke.json` (expected fingerprint and a smoke request; update it in the same commit as
+> any chemistry change). Sections 1-6 remain as a single-host fallback.
+
 ## 1. nginx vhost
 
 This block belongs in the `nginx` role of `metabolomics-us/fiehnlab-slurm-cluster`. That role owns
@@ -58,7 +70,7 @@ sudo mkdir -p /opt/denoise-service /etc/denoise-service
 sudo git clone https://github.com/metabolomics-us/impossible-mass-denoise.git /opt/denoise-service/app
 sudo python3 -m venv /opt/denoise-service/venv
 sudo /opt/denoise-service/venv/bin/pip install -r /opt/denoise-service/app/requirements.txt \
-    -r /opt/denoise-service/app/requirements-service.txt
+    --require-hashes -r /opt/denoise-service/app/requirements-service.lock
 sudo cp /opt/denoise-service/app/denoise_service/config.example.yaml /etc/denoise-service/config.yaml
 sudo cp /opt/denoise-service/app/ops/deploy/denoise-service.service /etc/systemd/system/
 sudo systemctl daemon-reload

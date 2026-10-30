@@ -47,3 +47,18 @@ steps:
       - 'set -eu'
       - 'echo "repo: ${CI_REPO} @ ${CI_COMMIT_SHA} (branch ${CI_COMMIT_BRANCH:-main})"'
       - 'bash ops/ci/test_service.sh'
+
+  # Merging a PR is a push to main: both gates above must pass first, then the
+  # head builds the release, rolls kvm-node-7 then kvm-node-8, verifies, and
+  # restores the previous release on failure. See ops/ci/woodpecker-deploy.sh
+  # for the trust model.
+  - name: deploy
+    image: bash
+    when:
+      - event: push
+        branch: main
+    environment:
+      DENOISE_DEPLOY_SSH_KEY:
+        from_secret: denoise_deploy_ssh_key
+    commands:
+      - 'bash ops/ci/woodpecker-deploy.sh'

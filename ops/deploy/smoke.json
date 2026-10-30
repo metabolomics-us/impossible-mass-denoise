@@ -1,0 +1,30 @@
+{
+  "fingerprint": "5aae4ec26694da4d",
+  "request": {
+    "mode": "pos",
+    "peaks": [
+      [
+        181.0707,
+        100
+      ],
+      [
+        100.5,
+        20
+      ],
+      [
+        123.9,
+        5
+      ],
+      [
+        85.0284,
+        40
+      ]
+    ]
+  },
+  "expect": [
+    true,
+    false,
+    false,
+    true
+  ]
+}
