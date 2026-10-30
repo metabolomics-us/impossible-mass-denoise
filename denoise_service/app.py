@@ -39,6 +39,9 @@ __all__ = ["create_app", "EXPECTED_FINGERPRINT"]
 EXPECTED_FINGERPRINT = "5aae4ec26694da4d"
 log = logging.getLogger("denoise_service.access")
 
+PAGE_CSP = ("default-src 'self'; img-src 'self' data:; base-uri 'none'; "
+            "form-action 'none'; frame-ancestors 'none'")
+
 _Number = Union[StrictInt, StrictFloat]
 
 
@@ -320,6 +323,15 @@ def create_app(config: Config) -> FastAPI:
     @app.get("/", include_in_schema=False)
     async def index() -> Response:
         return FileResponse(static_dir / "index.html", media_type="text/html")
+
+    @app.middleware("http")
+    async def page_headers(request: Request, call_next) -> Response:
+        response = await call_next(request)
+        path = request.url.path
+        if path == "/" or path == "/static" or path.startswith("/static/"):
+            response.headers["Cache-Control"] = "no-cache"
+            response.headers["Content-Security-Policy"] = PAGE_CSP
+        return response
 
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 

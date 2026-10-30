@@ -55,3 +55,36 @@ def test_api_routes_not_shadowed_and_docs_work(client):
     assert client.get("/docs").status_code == 200
     r = client.post("/v1/classify", json={"mode": "neg", "spectrum": "86.06:45 104.11:100"})
     assert r.status_code == 200 and r.json()["summary"]["total"] == 2
+
+
+CSP = ("default-src 'self'; img-src 'self' data:; base-uri 'none'; "
+       "form-action 'none'; frame-ancestors 'none'")
+
+
+def test_page_links_docs_and_openapi_and_schema_lists_paths(client):
+    html = client.get("/").text
+    assert 'href="/docs"' in html and 'href="/openapi.json"' in html
+    r = client.get("/openapi.json")
+    assert r.status_code == 200 and "json" in r.headers["content-type"]
+    assert {"/v1/classify", "/v1/classify/batch", "/healthz"} <= set(r.json()["paths"])
+
+
+@pytest.mark.parametrize("path", ["/", "/static/app.js", "/static/style.css"])
+def test_page_responses_have_cache_and_csp_headers(client, path):
+    r = client.get(path)
+    assert r.status_code == 200
+    assert r.headers["cache-control"] == "no-cache"
+    assert r.headers["content-security-policy"] == CSP
+
+
+def test_not_modified_response_keeps_headers(client):
+    first = client.get("/static/app.js")
+    r = client.get("/static/app.js", headers={"If-None-Match": first.headers["etag"]})
+    assert r.status_code == 304
+    assert r.headers["content-security-policy"] == CSP
+
+
+def test_csp_scoped_to_page_only(client):
+    for r in (client.get("/docs"), client.get("/healthz"),
+              client.post("/v1/classify", json={"mode": "neg", "spectrum": "86.06:45"})):
+        assert "content-security-policy" not in r.headers
