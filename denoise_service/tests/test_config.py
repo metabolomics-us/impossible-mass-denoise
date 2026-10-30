@@ -28,6 +28,7 @@ def test_defaults_match_proposed_limits():
     assert (c.host, c.port) == ("127.0.0.1", 8300)
     assert (c.max_peaks, c.max_batch, c.max_body_bytes) == (5000, 200, 1048576)
     assert (c.max_label, c.max_label_lookups) == (12, 200)
+    assert (c.max_request_lookups, c.max_pending) == (1000000, 8)
     assert (c.rate_per_minute, c.rate_burst, c.cache_clear_seconds) == (120, 30, 3600)
     assert c.trusted_proxy is True and c.cors_origins == ["*"]
 

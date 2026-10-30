@@ -19,6 +19,12 @@ def small(**kw):
 
 
 @pytest.fixture
+def bigclient():
+    with TestClient(create_app(small(max_body_bytes=1000000))) as c:
+        yield c
+
+
+@pytest.fixture
 def client():
     with TestClient(create_app(small())) as c:
         yield c
@@ -123,15 +129,40 @@ def test_empty_spectrum_422(client):
     assert post(client, {"mode": "neg", "peaks": []}).status_code == 422
 
 
-def test_422_does_not_echo_input(client):
-    secret = "86.0612345"
-    for body in ({"mode": "neg", "spectrum": "%s:zzz" % secret},
+def test_422_does_not_echo_input(bigclient, caplog):
+    caplog.set_level(logging.DEBUG)
+    secret = "SECRET123"
+    for body in ({"mode": "neg", "spectrum": "5 %s" % secret},
+                 {"mode": "neg", "spectrum": "%s 5" % secret},
+                 {"mode": "neg", "spectrum": "%s:5" % "-" + secret},
+                 {"mode": "neg", "spectrum": "-%s:3 1:2" % "5"},
+                 {"mode": "neg", "spectrum": "5:%s" % secret},
+                 {"mode": "neg", "spectrum": "1:2 3:4:%s" % secret},
+                 {"mode": "neg", "spectrum": "1:2 3:4 %s" % secret},
+                 {"mode": "neg", "spectrum": "1 -5:%s" % secret},
                  {"mode": secret, "peaks": [[86.06, 1]]},
                  {"mode": "neg", "peaks": [[86.06, 1]], "deuterium": secret},
-                 {"mode": "neg", "peaks": [[86.06, 1]], "bogus": secret}):
-        r = post(client, body)
+                 {"mode": "neg", "peaks": [[secret, 1]]}):
+        r = post(bigclient, body)
         assert r.status_code == 422
         assert secret not in r.text
+    big = "9" * 100000
+    for text in (big + "x 5", "-" + big + ":3", "1:" + big + "x"):
+        r = post(bigclient, {"mode": "neg", "spectrum": text})
+        assert r.status_code == 422
+        assert len(r.text) < 300
+        assert big[:50] not in r.text
+    assert secret not in caplog.text and big[:50] not in caplog.text
+    r = post(bigclient, {"mode": "neg", "spectrum": "-5:3"})
+    assert r.json()["detail"] == "line 1: m/z must be greater than zero"
+
+
+def test_unknown_field_name_is_truncated(bigclient):
+    key = "k" * 5000
+    r = post(bigclient, {"mode": "neg", "peaks": [[86.06, 1]], key: 1})
+    assert r.status_code == 422
+    assert len(r.text) < 300 and key not in r.text
+    assert "k" * 32 + "..." in r.json()["detail"]
 
 
 def test_not_json_or_not_object_422(client):
@@ -230,3 +261,111 @@ def test_logs_do_not_contain_spectrum_values(client, caplog):
     for s in ("86.0612", "104.1111", "45.5"):
         assert s not in text
     assert "/v1/classify" in text
+
+
+# ---- work budget, worker thread, pending cap -------------------------------------------------
+
+import asyncio
+import threading
+import time
+
+import httpx
+
+import denoise_service.classify as classify_mod
+
+
+def test_budget_exceeded_422_single_and_batch():
+    cfg = small(max_peaks=5000, max_request_lookups=20, max_label_lookups=100)
+    with TestClient(create_app(cfg)) as c:
+        peaks = [[50.0 + i, 1] for i in range(5)]
+        # 5 peaks x 4 combinations = 20: at the budget, allowed
+        ok = {"mode": "neg", "peaks": peaks, "deuterium": 3}
+        assert post(c, ok).status_code == 200
+        r = post(c, dict(ok, deuterium=4))
+        assert r.status_code == 422 and "budget" in r.json()["detail"]
+        assert "50.0" not in r.text
+        # each spectrum fits alone (15 and 15) but the batch total is 30
+        one = {"mode": "neg", "peaks": peaks[:3], "deuterium": 4}
+        assert post(c, {"spectra": [one]}, "/v1/classify/batch").status_code == 200
+        r = post(c, {"spectra": [one, one]}, "/v1/classify/batch")
+        assert r.status_code == 422 and "budget" in r.json()["detail"]
+        # text input is counted after parsing
+        text = {"mode": "neg", "spectrum": " ".join("%d:1" % (50 + i) for i in range(5)),
+                "deuterium": 4}
+        assert post(c, text).status_code == 422
+
+
+@pytest.fixture
+def slow(monkeypatch):
+    info = {"threads": [], "started": threading.Event()}
+    real = classify_mod.classify
+
+    def slow_classify(peaks, options):
+        info["threads"].append(threading.current_thread().name)
+        info["started"].set()
+        time.sleep(0.5)
+        return real(peaks, options)
+    monkeypatch.setattr(classify_mod, "classify", slow_classify)
+    return info
+
+
+async def _wait(event, limit=5.0):
+    end = time.monotonic() + limit
+    while not event.is_set():
+        assert time.monotonic() < end
+        await asyncio.sleep(0.01)
+
+
+BODY = {"mode": "neg", "peaks": [[86.06, 45]]}
+
+
+@pytest.mark.anyio
+async def test_healthz_answers_while_classify_runs(slow):
+    app = create_app(small())
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
+                                     base_url="http://t") as c:
+            job = asyncio.ensure_future(c.post("/v1/classify", json=BODY))
+            await _wait(slow["started"])
+            t0 = time.monotonic()
+            h = await c.get("/healthz")
+            assert h.status_code == 200 and time.monotonic() - t0 < 0.25
+            assert (await job).status_code == 200
+    assert slow["threads"][0].startswith("denoise-worker")
+    assert slow["threads"][0] != threading.current_thread().name
+
+
+@pytest.mark.anyio
+async def test_pending_cap_503_with_retry_after(slow):
+    app = create_app(small(max_pending=1))
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
+                                     base_url="http://t") as c:
+            first = asyncio.ensure_future(c.post("/v1/classify", json=BODY))
+            await _wait(slow["started"])
+            r = await c.post("/v1/classify", json=BODY)
+            assert r.status_code == 503 and "detail" in r.json()
+            assert int(r.headers["retry-after"]) >= 1
+            assert (await first).status_code == 200
+            assert (await c.post("/v1/classify", json=BODY)).status_code == 200
+
+
+@pytest.mark.anyio
+async def test_cache_clear_runs_on_worker_thread(monkeypatch):
+    seen = []
+    done = threading.Event()
+
+    def fake_clear():
+        seen.append(threading.current_thread().name)
+        done.set()
+    monkeypatch.setattr(denoise, "clear_cache", fake_clear)
+    app = create_app(small(cache_clear_seconds=1))
+    async with app.router.lifespan_context(app):
+        await _wait(done, 5.0)
+    assert seen and seen[0].startswith("denoise-worker")
+    assert seen[0] != threading.current_thread().name
+
+
+@pytest.fixture
+def anyio_backend():
+    return "asyncio"

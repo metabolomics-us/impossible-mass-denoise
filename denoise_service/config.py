@@ -28,6 +28,8 @@ class Config:
     max_body_bytes: int = 1048576
     max_label: int = 12
     max_label_lookups: int = 200
+    max_request_lookups: int = 1000000
+    max_pending: int = 8
     rate_per_minute: int = 120
     rate_burst: int = 30
     cache_clear_seconds: int = 3600

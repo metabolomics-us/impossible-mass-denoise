@@ -17,6 +17,7 @@ __all__ = ["parse_spectrum", "SpectrumParseError"]
 # "not a number" (float() would accept them, which is why they need an explicit check).
 _NUMBER = re.compile(r"^[+-]?(?:(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?|nan|inf|infinity)$",
                      re.IGNORECASE)
+_MAX_TOKEN = 64
 _SEPARATORS = re.compile(r"[\s;,]+")
 # An MSP header such as "Name: X" or "Num Peaks: 5": starts with a letter and contains a colon.
 # A leading nan:/inf: is a (bad) peak, not a header, so it must reach the number checks.
@@ -24,7 +25,16 @@ _NONFINITE_PEAK = re.compile(r"^[+-]?(?:nan|inf|infinity):", re.IGNORECASE)
 
 
 class SpectrumParseError(ValueError):
-    """Raised for unparseable spectrum text; the message names the line and the bad token."""
+    """Raised for unparseable spectrum text; the message names the line and the bad token.
+
+    `.line` (1-based, 0 when not tied to a line) and `.reason` (no quoted token) let callers
+    report the problem without echoing user-supplied text.
+    """
+
+    def __init__(self, message: str, line: int = 0, reason: str = "") -> None:
+        super().__init__(message)
+        self.line = line
+        self.reason = reason or message
 
 
 def _is_header(line: str) -> bool:
@@ -32,19 +42,24 @@ def _is_header(line: str) -> bool:
 
 
 def _number(token: str, line_no: int) -> float:
-    if not _NUMBER.match(token):
-        raise SpectrumParseError("line %d: %r is not a number" % (line_no, token))
+    # The length guard also keeps the regex linear: `\d+\.?\d*` backtracks quadratically on a
+    # very long digit run that ends in a bad character.
+    if len(token) > _MAX_TOKEN or not _NUMBER.match(token):
+        raise SpectrumParseError("line %d: %r is not a number" % (line_no, token),
+                                 line_no, "value is not a number")
     return float(token)
 
 
 def _peak(mz: float, intensity: float, token: str, line_no: int) -> Tuple[float, float]:
     if not (math.isfinite(mz) and math.isfinite(intensity)):
-        raise SpectrumParseError("line %d: non-finite value in %r" % (line_no, token))
+        raise SpectrumParseError("line %d: non-finite value in %r" % (line_no, token),
+                                 line_no, "value is not finite")
     if mz <= 0:
-        raise SpectrumParseError("line %d: m/z must be greater than zero in %r" % (line_no, token))
+        raise SpectrumParseError("line %d: m/z must be greater than zero in %r" % (line_no, token),
+                                 line_no, "m/z must be greater than zero")
     if intensity < 0:
         raise SpectrumParseError("line %d: intensity must not be negative in %r"
-                                 % (line_no, token))
+                                 % (line_no, token), line_no, "intensity must not be negative")
     return (mz, intensity)
 
 
@@ -63,14 +78,16 @@ def parse_spectrum(text: str) -> List[Tuple[float, float]]:
                 parts = token.split(":")
                 if len(parts) != 2:
                     raise SpectrumParseError("line %d: %r is not an mz:intensity pair"
-                                             % (line_no, token))
+                                             % (line_no, token), line_no,
+                                             "not an mz:intensity pair")
                 peaks.append(_peak(_number(parts[0], line_no), _number(parts[1], line_no),
                                    token, line_no))
             else:
                 loose.append((_number(token, line_no), token))
         if len(loose) % 2:
             raise SpectrumParseError("line %d: odd number of values; last value %r has no partner"
-                                     % (line_no, loose[-1][1]))
+                                     % (line_no, loose[-1][1]), line_no,
+                                     "odd number of values; last value has no partner")
         for i in range(0, len(loose), 2):
             (mz, t1), (inten, t2) = loose[i], loose[i + 1]
             peaks.append(_peak(mz, inten, "%s %s" % (t1, t2), line_no))

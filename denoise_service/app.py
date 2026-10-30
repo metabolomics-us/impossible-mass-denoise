@@ -14,6 +14,7 @@ import contextlib
 import logging
 import math
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import orjson
@@ -86,7 +87,8 @@ def _validate(raw: Any, cfg: Config, where: str = "") -> Tuple[List[Tuple[float,
         raise bad("body must be a JSON object")
     unknown = sorted(k for k in raw if k not in _FIELDS)
     if unknown:
-        raise bad("unknown field: %s" % unknown[0])
+        key = unknown[0]
+        raise bad("unknown field: %s" % (key if len(key) <= 32 else key[:32] + "..."))
     try:
         req = SpectrumRequest(**raw)
     except ValidationError as exc:
@@ -128,13 +130,25 @@ def _validate(raw: Any, cfg: Config, where: str = "") -> Tuple[List[Tuple[float,
         try:
             peaks = parse_spectrum(req.spectrum or "")
         except SpectrumParseError as exc:
-            raise bad(str(exc))
+            # Line and reason only: the exception's own message quotes the posted token.
+            raise bad("line %d: %s" % (exc.line, exc.reason) if exc.line else exc.reason)
         if len(peaks) > cfg.max_peaks:
             raise bad("too many peaks: at most %d allowed" % cfg.max_peaks)
     options = Options(mode=req.mode, halogens=req.halogens, deuterium=req.deuterium,
                       carbon13=req.carbon13, nitrogen15=req.nitrogen15,
                       precursor_mz=None if req.precursor_mz is None else float(req.precursor_mz))
     return peaks, options, req.id
+
+
+def _work(peaks: List[Tuple[float, float]], options: Options) -> int:
+    """Lookups one spectrum costs: peaks x label combinations."""
+    return len(peaks) * (options.deuterium + 1) * (options.carbon13 + 1) * (options.nitrogen15 + 1)
+
+
+def _check_budget(total: int, cfg: Config) -> None:
+    if total > cfg.max_request_lookups:
+        raise ApiError(422, "request too large: work budget is %d (peaks x label combinations "
+                       "summed over spectra)" % cfg.max_request_lookups)
 
 
 def _run(peaks: List[Tuple[float, float]], options: Options) -> Dict[str, Any]:
@@ -146,6 +160,10 @@ def _run(peaks: List[Tuple[float, float]], options: Options) -> Dict[str, Any]:
                  for (mz, inten), ok in zip(peaks, result.possible)],
         "summary": result.summary,
     }
+
+
+def _clear_cache() -> None:
+    denoise.clear_cache()
 
 
 def _check_tables() -> None:
@@ -161,14 +179,20 @@ def _check_tables() -> None:
 def create_app(config: Config) -> FastAPI:
     limiter = TokenBucket(config.rate_per_minute, config.rate_burst)
 
+    # One dedicated worker thread owns all classification and the denoise cache.
+    state = {"executor": None, "pending": 0}  # type: Dict[str, Any]
+
     async def _clear_loop() -> None:
+        loop = asyncio.get_event_loop()
         while True:
             await asyncio.sleep(config.cache_clear_seconds)
-            denoise.clear_cache()
+            await loop.run_in_executor(state["executor"], _clear_cache)
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):
         _check_tables()
+        state["executor"] = ThreadPoolExecutor(max_workers=1, thread_name_prefix="denoise-worker")
+        state["pending"] = 0
         task = asyncio.ensure_future(_clear_loop())
         try:
             yield
@@ -176,6 +200,7 @@ def create_app(config: Config) -> FastAPI:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+            state["executor"].shutdown(wait=True)
 
     app = FastAPI(title="denoise service", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
@@ -218,7 +243,15 @@ def create_app(config: Config) -> FastAPI:
                 raw = orjson.loads(body)
             except orjson.JSONDecodeError:
                 raise ApiError(422, "body is not valid JSON")
-            payload, ions = work(raw)
+            compute, ions = work(raw)
+            if state["pending"] >= config.max_pending:
+                raise ApiError(503, "server busy; retry later", {"Retry-After": "1"})
+            state["pending"] += 1
+            try:
+                payload = await asyncio.get_event_loop().run_in_executor(
+                    state["executor"], compute)
+            finally:
+                state["pending"] -= 1
             response = _json(200, payload)
         except ApiError as err:
             response = _json(err.status, {"detail": err.detail}, err.headers)
@@ -229,7 +262,8 @@ def create_app(config: Config) -> FastAPI:
 
     def classify_work(raw: Any):
         peaks, options, _ = _validate(raw, config)
-        return _run(peaks, options), len(peaks)
+        _check_budget(_work(peaks, options), config)
+        return (lambda: _run(peaks, options)), len(peaks)
 
     def batch_work(raw: Any):
         if not isinstance(raw, dict) or set(raw) - {"spectra"}:
@@ -240,12 +274,16 @@ def create_app(config: Config) -> FastAPI:
         if len(spectra) > config.max_batch:
             raise ApiError(422, "too many spectra: at most %d allowed" % config.max_batch)
         parsed = [_validate(s, config, "spectra[%d]: " % i) for i, s in enumerate(spectra)]
-        results = []
-        for peaks, options, ident in parsed:
-            out = _run(peaks, options)
-            out["id"] = ident
-            results.append(out)
-        return {"results": results}, sum(len(p[0]) for p in parsed)
+        _check_budget(sum(_work(p, o) for p, o, _ in parsed), config)
+
+        def compute() -> Dict[str, Any]:
+            results = []
+            for peaks, options, ident in parsed:
+                out = _run(peaks, options)
+                out["id"] = ident
+                results.append(out)
+            return {"results": results}
+        return compute, sum(len(p[0]) for p in parsed)
 
     @app.post("/v1/classify")
     async def classify_endpoint(request: Request) -> Response:

@@ -50,3 +50,26 @@ def test_parse_rejects_nonfinite_zero_negative_mz_and_negative_intensity(text):
 def test_parse_rejects_empty(text):
     with pytest.raises(SpectrumParseError):
         parse_spectrum(text)
+
+
+def test_error_has_line_and_reason_without_token():
+    from denoise_service.parse import SpectrumParseError, parse_spectrum
+    for text, line, reason in [("1:2\n5 SECRET123", 2, "value is not a number"),
+                               ("-5:3", 1, "m/z must be greater than zero"),
+                               ("1:-3", 1, "intensity must not be negative"),
+                               ("1 2 3", 1, "odd number of values")]:
+        try:
+            parse_spectrum(text)
+        except SpectrumParseError as e:
+            assert e.line == line and e.reason.startswith(reason)
+            assert "SECRET123" not in e.reason
+        else:
+            raise AssertionError(text)
+
+
+def test_very_long_token_is_rejected_quickly():
+    import time
+    t0 = time.monotonic()
+    with pytest.raises(SpectrumParseError):
+        parse_spectrum("9" * 100000 + "x 5")
+    assert time.monotonic() - t0 < 1.0

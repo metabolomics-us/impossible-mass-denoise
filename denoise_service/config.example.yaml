@@ -24,6 +24,12 @@ max_label: 12
 # Cap on the label lookup product (d+1)*(c+1)*(n+1); bounds work per request.
 max_label_lookups: 200
 
+# Total work allowed in one request: the sum over its spectra of peaks x (d+1)(c+1)(n+1).
+max_request_lookups: 1000000
+
+# Most classify requests queued or running at once; further ones get 503 with Retry-After.
+max_pending: 8
+
 # Sustained requests per minute allowed per client.
 rate_per_minute: 120
 
