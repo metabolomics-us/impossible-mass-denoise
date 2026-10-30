@@ -215,3 +215,27 @@ def test_mgf_unparseable_peak_line_passes_record_through_with_error():
     text = "BEGIN IONS\nIONMODE=pos\n181.0707 10 100.5\nEND IONS\n"
     res = run(text)
     assert res.text == text and res.records[0]["error"]
+
+
+def test_split_stops_at_max_batch_plus_one_without_parsing_records(monkeypatch):
+    made = []
+    real = cv._make
+    monkeypatch.setattr(cv, "_make", lambda *a, **k: made.append(1) or real(*a, **k))
+    with pytest.raises(cv.ConvertLimitError):
+        cv.prepare("Name:x\n" * 20000, "pos", None, 5000, 3)
+    assert not made
+    with pytest.raises(cv.ConvertLimitError):
+        cv.prepare("1:1 1:1\n" * 20000, "pos", None, 5000, 3)
+    assert not made
+
+
+def test_peak_line_stops_tokenising_past_max_peaks(monkeypatch):
+    seen = []
+    real = cv._number
+    monkeypatch.setattr(cv, "_number", lambda *a: seen.append(1) or real(*a))
+    for text in ("1:1 " * 50000, "1 1 " * 50000, "Name: a\n" + "1:1 " * 50000):
+        del seen[:]
+        res = run(text, max_peaks=5)
+        assert res.records[0]["error"] == "more than 5 peaks"
+        assert res.text == text
+        assert len(seen) < 100

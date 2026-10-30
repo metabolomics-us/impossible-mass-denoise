@@ -354,15 +354,8 @@ def create_app(config: Config) -> FastAPI:
             raise ApiError(422, "precursor_mz: must be a finite number greater than zero")
         if not req.text.strip():
             raise ApiError(422, "text: no spectrum found")
-        try:
-            prep = convert_mod.prepare(
-                req.text, req.mode, None if req.precursor_mz is None else float(req.precursor_mz),
-                config.max_peaks, config.max_batch, req.format)
-        except convert_mod.ConvertLimitError as exc:
-            raise ApiError(422, exc.reason)
         lookups = (req.deuterium + 1) * (req.carbon13 + 1) * (req.nitrogen15 + 1)
-        classified = [r for r in prep.records if r.error is None and r.mode is not None]
-        _check_budget(sum(len(r.values) for r in classified) * lookups, config)
+        default_precursor = None if req.precursor_mz is None else float(req.precursor_mz)
 
         def classify_peaks(peaks, mode, precursor):
             return classify_mod.classify(peaks, Options(
@@ -371,10 +364,19 @@ def create_app(config: Config) -> FastAPI:
                 precursor_mz=precursor)).possible
 
         def compute() -> Dict[str, Any]:
+            # Splitting and parsing are CPU-bound, so they run here on the single worker (like
+            # classification), never on the event loop.
+            try:
+                prep = convert_mod.prepare(req.text, req.mode, default_precursor,
+                                           config.max_peaks, config.max_batch, req.format)
+            except convert_mod.ConvertLimitError as exc:
+                raise ApiError(422, exc.reason)
+            classified = [r for r in prep.records if r.error is None and r.mode is not None]
+            _check_budget(sum(len(r.values) for r in classified) * lookups, config)
             res = convert_mod.apply(prep, classify_peaks)
             return {"fingerprint": state["fp"], "format": res.format, "text": res.text,
                     "records": res.records, "summary": res.summary}
-        return compute, sum(len(r.values) for r in prep.records)
+        return compute, None
 
     @app.post("/v1/convert")
     async def convert_endpoint(request: Request) -> Response:

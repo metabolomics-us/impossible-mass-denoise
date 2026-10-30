@@ -11,6 +11,7 @@ logged here.
 """
 import re
 from dataclasses import dataclass, field
+from itertools import islice
 from typing import Callable, Dict, List, Optional, Tuple
 
 from denoise_service.parse import SpectrumParseError, _is_header, _number, _peak
@@ -91,26 +92,40 @@ def _split_lines(text: str) -> List[str]:
     return _LINE.findall(text)
 
 
+_PAIR = r"[^:\s;,]+:[^:\s;,]+"
+_PAIR_LINE = re.compile(r"^[\s;,]*(?:%s[\s;,]+)*%s[\s;,]*$" % (_PAIR, _PAIR))
+_TWO_PAIRS = re.compile(r"%s[\s;,]+%s" % (_PAIR, _PAIR))
+_NAME_LINE = re.compile(r"^name\s*:", re.IGNORECASE)
+
+
 def _is_pair_line(stripped: str) -> bool:
-    toks = _TOKEN.findall(stripped)
-    return bool(toks) and all(_PAIRISH.match(t) for t in toks)
+    return _PAIR_LINE.match(stripped) is not None
 
 
 def detect_format(text: str) -> str:
     """One of msp, mgf, strings, columns. Several pair-only lines are strings; one pair per line is
     one spectrum in columns."""
-    stripped = [ln.strip() for ln in _split_lines(text)]
-    stripped = [s for s in stripped if s]
-    if any(s.upper() == "BEGIN IONS" for s in stripped):
-        return "mgf"
-    for s in stripped:
-        if re.match(r"^name\s*:", s, re.IGNORECASE) or _NUM_PEAKS.match(s):
-            return "msp"
-    if stripped and all(_is_pair_line(s) for s in stripped):
-        counts = [len(_TOKEN.findall(s)) for s in stripped]
-        if len(stripped) == 1 or any(c > 1 for c in counts):
-            return "strings"
-    return "columns"
+    lines = 0
+    msp = False
+    pairs = True
+    multi = False
+    for ln in _split_lines(text):
+        s = ln.strip()
+        if not s:
+            continue
+        lines += 1
+        if s.upper() == "BEGIN IONS":
+            return "mgf"
+        if not msp and (_NAME_LINE.match(s) or _NUM_PEAKS.match(s)):
+            msp = True
+        if pairs:
+            if not _is_pair_line(s):
+                pairs = False
+            elif not multi and _TWO_PAIRS.search(s):
+                multi = True
+    if msp:
+        return "msp"
+    return "strings" if lines and pairs and (lines == 1 or multi) else "columns"
 
 
 def _norm_key(key: str) -> str:
@@ -158,9 +173,20 @@ def _metadata(rec: Record) -> None:
         rec.mode = charge_mode
 
 
-def _line_units(body: str) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str, float, float]]]:
+class _OverCap(Exception):
+    """A peak line holds more tokens than the peak cap could ever allow."""
+
+
+def _line_units(body: str, room: Optional[int] = None) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str, float, float]]]:
     """Units of one peak line as ([(prefix, text)], [(mz_tok, int_tok, mz, int)])."""
-    toks = list(_TOKEN.finditer(body))
+    # Tokenise lazily: past 2*room+2 tokens the line has more than `room` peaks (or is invalid
+    # anyway), so a hostile single line is never expanded in full.
+    if room is None:
+        toks = list(_TOKEN.finditer(body))
+    else:
+        toks = list(islice(_TOKEN.finditer(body), 2 * room + 3))
+        if len(toks) > 2 * room + 2:
+            raise _OverCap()
     units = []  # type: List[Tuple[str, str]]
     vals = []  # type: List[Tuple[str, str, float, float]]
     prev_end = 0
@@ -200,8 +226,12 @@ def _parse_peaks(rec: Record, max_peaks: Optional[int]) -> None:
         if kind != "p":
             continue
         body, _ = _split_ending(line)
+        room = None if max_peaks is None else max(max_peaks - len(rec.values), 0)
         try:
-            units, vals = _line_units(body)
+            units, vals = _line_units(body, room)
+        except _OverCap:
+            rec.error = "more than %d peaks" % max_peaks
+            return
         except SpectrumParseError as exc:
             rec.error = "%s (line %d of the record)" % (exc.reason, n)
             return
@@ -235,13 +265,19 @@ def _make(index: int, fmt: str, lines: List[str], kinds: List[str],
     return rec
 
 
-def split_records(text: str, fmt: str, max_peaks: Optional[int] = None) -> List[Record]:
-    """Split `text` into records; every character of `text` belongs to exactly one record."""
+def split_records(text: str, fmt: str, max_peaks: Optional[int] = None,
+                  max_batch: Optional[int] = None) -> List[Record]:
+    """Split `text` into records; every character of `text` belongs to exactly one record.
+
+    With `max_batch`, raises ConvertLimitError as soon as one record too many starts, before any
+    record is parsed."""
     lines = _split_lines(text)
     groups = []  # type: List[Tuple[List[str], List[str]]]
     lead = []  # type: List[Tuple[str, str]]  # lines before the first record
 
     def start() -> Tuple[List[str], List[str]]:
+        if max_batch is not None and len(groups) >= max_batch:
+            raise ConvertLimitError("too many records: at most %d allowed" % max_batch)
         g = ([], [])  # type: Tuple[List[str], List[str]]
         for ln, kd in lead:
             g[0].append(ln)
@@ -358,7 +394,7 @@ def prepare(text: str, default_mode: Optional[str], default_precursor: Optional[
     fmt = fmt or detect_format(text)
     if fmt not in FORMATS:
         raise ConvertLimitError("format: must be one of msp, mgf, strings, columns")
-    records = split_records(text, fmt, max_peaks)
+    records = split_records(text, fmt, max_peaks, max_batch)
     if len(records) > max_batch:
         raise ConvertLimitError("too many records: at most %d allowed" % max_batch)
     for rec in records:
