@@ -88,3 +88,33 @@ def test_csp_scoped_to_page_only(client):
     for r in (client.get("/docs"), client.get("/healthz"),
               client.post("/v1/classify", json={"mode": "neg", "spectrum": "86.06:45"})):
         assert "content-security-policy" not in r.headers
+
+
+def test_page_has_zoom_controls_and_download_buttons(client):
+    html = client.get("/").text
+    for ident in ("zoomin", "zoomout", "zoomreset", "panleft", "panright", "download",
+                  "copycleaned", "copy", "go", "cancel", "file", "spectrum", "plot", "progress",
+                  "summary", "records", "table"):
+        assert 'id="%s"' % ident in html, ident
+    assert 'aria-label="Zoom in"' in html and 'aria-label="Zoom out"' in html
+    assert re.search(r'<p id="progress"[^>]*aria-live="polite"', html)
+    assert re.search(r'<div id="plot" tabindex="0"', html)
+    css = client.get("/static/style.css").text
+    assert "(min-width: 52rem)" in css and "grid-template-columns" in css
+
+
+def test_page_has_no_inline_script_or_style(client):
+    html = client.get("/").text
+    assert all("src=" in m for m in re.findall(r"<script\b([^>]*)>", html))
+    assert "<style" not in html and not re.search(r"\sstyle\s*=", html)
+    assert not re.search(r"\son[a-z]+\s*=", html)
+    js = client.get("/static/app.js").text
+    assert 'setAttribute("style"' not in js and "innerHTML" not in js and "eval(" not in js
+
+
+def test_csp_header_still_blocks_inline(client):
+    r = client.get("/")
+    csp = r.headers["content-security-policy"]
+    assert csp == CSP
+    assert "unsafe-inline" not in csp and "unsafe-eval" not in csp
+    assert "script-src" not in csp  # default-src 'self' governs scripts and styles

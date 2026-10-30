@@ -1,56 +1,4 @@
 "use strict";
-/* Pure helpers first (no DOM), so they can be tested under node. */
-var BLUE = "#022851", RED = "#c62828";
-
-function summaryText(s) {
-  var pct = s.intensity_impossible_fraction * 100;
-  var shown = pct === 0 || pct >= 1 || pct <= -1 ? String(Math.round(pct)) : pct.toFixed(1);
-  return s.impossible + " of " + s.total + " ions impossible, " + shown + "% of total intensity";
-}
-
-function niceStep(span, target) {
-  var raw = span / target, mag = Math.pow(10, Math.floor(Math.log10(raw))), f = raw / mag;
-  return (f < 1.5 ? 1 : f < 3.5 ? 2 : f < 7.5 ? 5 : 10) * mag;
-}
-
-function axisTicks(lo, hi, target) {
-  if (!(hi > lo)) return [lo];
-  var step = niceStep(hi - lo, target), out = [];
-  for (var v = Math.ceil(lo / step) * step; v <= hi + step * 1e-9; v += step) {
-    out.push(Math.round(v / step) * step);
-  }
-  return out;
-}
-
-function fmtTick(v) { return String(parseFloat(v.toPrecision(6))); }
-
-/* Geometry for the stick plot: pixel positions per ion plus the tick marks. Never divides by zero. */
-function plotModel(ions, w, h, pad) {
-  var xs = ions.map(function (i) { return i.mz; });
-  var lo = Math.min.apply(null, xs), hi = Math.max.apply(null, xs);
-  if (!(hi > lo)) { lo -= 1; hi += 1; }
-  var margin = (hi - lo) * 0.03; lo -= margin; hi += margin;
-  var top = Math.max.apply(null, ions.map(function (i) { return i.intensity; }));
-  if (!(top > 0)) top = 1;
-  var iw = w - pad.l - pad.r, ih = h - pad.t - pad.b;
-  var sticks = ions.map(function (i) {
-    return { x: pad.l + (i.mz - lo) / (hi - lo) * iw,
-             y: pad.t + ih - Math.max(0, i.intensity) / top * ih,
-             y0: pad.t + ih, possible: i.possible };
-  });
-  var xticks = axisTicks(lo, hi, 6).map(function (v) {
-    return { v: v, x: pad.l + (v - lo) / (hi - lo) * iw };
-  });
-  var yticks = [0, 25, 50, 75, 100].map(function (p) {
-    return { v: p, y: pad.t + ih - p / 100 * ih };
-  });
-  return { sticks: sticks, xticks: xticks, yticks: yticks, iw: iw, ih: ih };
-}
-
-if (typeof module !== "undefined") {
-  module.exports = { summaryText: summaryText, axisTicks: axisTicks, plotModel: plotModel };
-}
-
 /* DOM part. All text goes through textContent / setAttribute. */
 (function () {
   if (typeof document === "undefined") return;
@@ -76,41 +24,229 @@ if (typeof module !== "undefined") {
     m.hidden = !text;
   }
 
-  function drawPlot(data) {
-    var W = 720, H = 300, pad = { l: 46, r: 14, t: 14, b: 62 };
-    var m = plotModel(data.ions, W, H, pad);
+  /* ---- zoomable stick plot -------------------------------------------------------------- */
+  var BLUE = "#022851", RED = "#c62828";
+  var W = 720, H = 300, PAD = { l: 46, r: 12, t: 12, b: 36 };
+  var IW = W - PAD.l - PAD.r, IH = H - PAD.t - PAD.b;
+  var view = null;   // {ions, bounds:{lo,hi}, range:{lo,hi}, focus:ion|null}
+
+  function fmt(v) { return String(parseFloat(v.toPrecision(6))); }
+
+  function setPlot(data) {
+    var ions = data.ions.slice().sort(function (a, b) { return a.mz - b.mz; });
+    var lo = ions[0].mz, hi = ions[ions.length - 1].mz;
+    var pad = hi > lo ? (hi - lo) * 0.03 : 1;
+    var bounds = { lo: lo - pad, hi: hi + pad };
+    view = { ions: ions, bounds: bounds, range: { lo: bounds.lo, hi: bounds.hi }, tip: null };
+    $("npossible").textContent = "(" + ions.filter(function (i) { return i.possible; }).length + ")";
+    $("nimpossible").textContent = "(" + ions.filter(function (i) { return !i.possible; }).length + ")";
+    drawPlot();
+  }
+
+  function xOf(mz) { return PAD.l + (mz - view.range.lo) / (view.range.hi - view.range.lo) * IW; }
+  function mzOf(x) { return view.range.lo + (x - PAD.l) / IW * (view.range.hi - view.range.lo); }
+
+  function drawPlot() {
+    if (!view) return;
+    var r = view.range;
+    var vis = view.ions.filter(function (i) { return i.mz >= r.lo && i.mz <= r.hi; });
+    var top = vis.reduce(function (m, i) { return Math.max(m, i.intensity); }, 0) || 1;
+    var yOf = function (v) { return PAD.t + IH - Math.max(0, v) / top * IH; };
     var root = svg("svg", { viewBox: "0 0 " + W + " " + H, role: "img",
-                            "aria-label": "Stick plot of ion intensity against m/z" });
-    root.appendChild(svg("line", { x1: pad.l, y1: pad.t + m.ih, x2: pad.l + m.iw, y2: pad.t + m.ih, stroke: "#333" }));
-    root.appendChild(svg("line", { x1: pad.l, y1: pad.t, x2: pad.l, y2: pad.t + m.ih, stroke: "#333" }));
-    m.yticks.forEach(function (t) {
-      root.appendChild(svg("line", { x1: pad.l - 4, y1: t.y, x2: pad.l, y2: t.y, stroke: "#333" }));
-      root.appendChild(svg("text", { x: pad.l - 7, y: t.y + 4, "text-anchor": "end", "font-size": 11, fill: "#333" }, String(t.v)));
+                            "aria-label": "Stick plot, m/z " + fmt(r.lo) + " to " + fmt(r.hi) + ", " + vis.length + " ions shown" });
+    var ax = { stroke: "#333" };
+    root.appendChild(svg("line", { x1: PAD.l, y1: PAD.t + IH, x2: PAD.l + IW, y2: PAD.t + IH, stroke: ax.stroke }));
+    root.appendChild(svg("line", { x1: PAD.l, y1: PAD.t, x2: PAD.l, y2: PAD.t + IH, stroke: ax.stroke }));
+    [0, 25, 50, 75, 100].forEach(function (p) {
+      var y = PAD.t + IH - p / 100 * IH;
+      root.appendChild(svg("line", { x1: PAD.l - 4, y1: y, x2: PAD.l, y2: y, stroke: ax.stroke }));
+      root.appendChild(svg("text", { x: PAD.l - 7, y: y + 4, "text-anchor": "end", "font-size": 11, fill: "#333" }, String(p)));
     });
-    m.xticks.forEach(function (t) {
-      root.appendChild(svg("line", { x1: t.x, y1: pad.t + m.ih, x2: t.x, y2: pad.t + m.ih + 4, stroke: "#333" }));
-      root.appendChild(svg("text", { x: t.x, y: pad.t + m.ih + 17, "text-anchor": "middle", "font-size": 11, fill: "#333" }, fmtTick(t.v)));
+    L.niceTicks(r.lo, r.hi, 7).forEach(function (v) {
+      var x = xOf(v);
+      if (x < PAD.l - 0.5 || x > PAD.l + IW + 0.5) return;
+      root.appendChild(svg("line", { x1: x, y1: PAD.t + IH, x2: x, y2: PAD.t + IH + 4, stroke: ax.stroke }));
+      root.appendChild(svg("text", { x: x, y: PAD.t + IH + 17, "text-anchor": "middle", "font-size": 11, fill: "#333" }, fmt(v)));
     });
-    root.appendChild(svg("text", { x: pad.l + m.iw / 2, y: H - 24, "text-anchor": "middle", "font-size": 12, fill: "#333" }, "m/z"));
-    root.appendChild(svg("text", { x: 12, y: pad.t + m.ih / 2, "font-size": 12, fill: "#333", "text-anchor": "middle",
-                                   transform: "rotate(-90 12 " + (pad.t + m.ih / 2) + ")" }, "relative intensity (%)"));
+    root.appendChild(svg("text", { x: PAD.l + IW / 2, y: H - 4, "text-anchor": "middle", "font-size": 12, fill: "#333" }, "m/z"));
+    root.appendChild(svg("text", { x: 11, y: PAD.t + IH / 2, "font-size": 12, fill: "#333", "text-anchor": "middle",
+                                   transform: "rotate(-90 11 " + (PAD.t + IH / 2) + ")" }, "relative intensity (%)"));
     // possible first so impossible sticks draw on top
     [true, false].forEach(function (flag) {
-      m.sticks.forEach(function (s) {
-        if (s.possible !== flag) return;
-        root.appendChild(svg("line", { x1: s.x, y1: s.y0, x2: s.x, y2: s.y,
-                                       stroke: flag ? BLUE : RED, "stroke-width": 2 }));
+      vis.forEach(function (i) {
+        if (i.possible !== flag) return;
+        root.appendChild(svg("line", { x1: xOf(i.mz), y1: PAD.t + IH, x2: xOf(i.mz), y2: yOf(i.intensity),
+                                       stroke: flag ? BLUE : RED, "stroke-width": 2, "pointer-events": "none" }));
       });
     });
-    var np = data.summary.total - data.summary.impossible, ni = data.summary.impossible;
-    var ly = H - 8;
-    root.appendChild(svg("rect", { x: pad.l, y: ly - 10, width: 12, height: 12, fill: BLUE }));
-    root.appendChild(svg("text", { x: pad.l + 18, y: ly, "font-size": 12, fill: "#222" }, "possible (" + np + ")"));
-    root.appendChild(svg("rect", { x: pad.l + 140, y: ly - 10, width: 12, height: 12, fill: RED }));
-    root.appendChild(svg("text", { x: pad.l + 158, y: ly, "font-size": 12, fill: "#222" }, "impossible (" + ni + ")"));
+    if (vis.length <= 60) {
+      // keyboard-focusable hit targets, only when few enough ions are visible to tab through
+      vis.forEach(function (i) {
+        var hit = svg("line", { x1: xOf(i.mz), y1: PAD.t + IH, x2: xOf(i.mz), y2: yOf(i.intensity) - 3,
+                                stroke: "transparent", "stroke-width": 9, tabindex: 0, class: "hit",
+                                "aria-label": "m/z " + i.mz + ", intensity " + i.intensity + ", " + (i.possible ? "possible" : "not explained by CHNOPS") });
+        hit.addEventListener("focus", function () { showTip(i); });
+        hit.addEventListener("blur", hideTip);
+        root.appendChild(hit);
+      });
+    }
+    var sel = svg("rect", { id: "selrect", x: 0, y: PAD.t, width: 0, height: IH, fill: "rgba(2,40,81,0.15)", stroke: BLUE, visibility: "hidden", "pointer-events": "none" });
+    root.appendChild(sel);
+    var tip = svg("g", { id: "tip", visibility: "hidden", "pointer-events": "none" });
+    tip.appendChild(svg("rect", { id: "tiprect", rx: 3, fill: "#fff", stroke: "#333", "fill-opacity": 0.95 }));
+    tip.appendChild(svg("text", { id: "tiptext", "font-size": 11, fill: "#111" }));
+    root.appendChild(tip);
     var box = $("plot");
+    var hadFocus = document.activeElement && box.contains(document.activeElement) && document.activeElement !== box;
     box.textContent = "";
     box.appendChild(root);
+    view.svg = root;
+    view.yOf = yOf;
+    view.vis = vis;
+    view.tip = null;
+    $("range").textContent = "m/z " + fmt(r.lo) + " to " + fmt(r.hi) + ", " + vis.length + " of " + view.ions.length + " ions";
+    if (hadFocus) box.focus();
+  }
+
+  function showTip(i) {
+    var t = $("tiptext"), g = $("tip"), rc = $("tiprect");
+    if (!t) return;
+    t.textContent = "";
+    var lines = ["m/z " + i.mz, "intensity " + i.intensity, i.possible ? "possible" : "not explained by CHNOPS"];
+    lines.forEach(function (l, n) {
+      var ts = svg("tspan", { x: 0, dy: n ? 13 : 0 }, l);
+      t.appendChild(ts);
+    });
+    var w = 150, h = 48;
+    var x = Math.min(Math.max(xOf(i.mz) + 8, PAD.l + 2), W - w - 4);
+    var y = Math.max(view.yOf(i.intensity), PAD.t + 4);
+    y = Math.min(y, PAD.t + IH - h);
+    rc.setAttribute("x", x - 5); rc.setAttribute("y", y - 4); rc.setAttribute("width", w); rc.setAttribute("height", h);
+    t.setAttribute("transform", "translate(" + x + " " + (y + 8) + ")");
+    t.querySelectorAll("tspan").forEach(function (ts) { ts.setAttribute("x", 0); });
+    g.setAttribute("visibility", "visible");
+  }
+
+  function hideTip() { var g = $("tip"); if (g) g.setAttribute("visibility", "hidden"); }
+
+  function applyRange(r) {
+    if (!view) return;
+    view.range = r;
+    drawPlot();
+  }
+
+  function zoomBy(factor, centerMz) {
+    if (!view) return;
+    var c = centerMz === undefined ? (view.range.lo + view.range.hi) / 2 : centerMz;
+    applyRange(L.zoomRange(view.range, factor, c, view.bounds));
+  }
+
+  function panBy(frac) {
+    if (!view) return;
+    applyRange(L.panRange(view.range, (view.range.hi - view.range.lo) * frac, view.bounds));
+  }
+
+  function resetZoom() { if (view) applyRange({ lo: view.bounds.lo, hi: view.bounds.hi }); }
+
+  /* Pointer handling: wheel zooms about the cursor; mouse drag selects a range, shift-drag pans;
+     one finger pans; two fingers pinch. Double-click resets. */
+  function svgX(ev) {
+    var rc = view.svg.getBoundingClientRect();
+    return (ev.clientX - rc.left) / rc.width * W;
+  }
+
+  function nearest(ev) {
+    var x = svgX(ev), best = null, d = 8;
+    view.vis.forEach(function (i) { var dd = Math.abs(xOf(i.mz) - x); if (dd < d) { d = dd; best = i; } });
+    return best;
+  }
+
+  function setupPlotEvents() {
+    var box = $("plot"), pts = {}, drag = null, pinch = null;
+    function count() { return Object.keys(pts).length; }
+    box.addEventListener("wheel", function (ev) {
+      if (!view) return;
+      ev.preventDefault();
+      zoomBy(ev.deltaY < 0 ? 0.8 : 1.25, mzOf(svgX(ev)));
+    }, { passive: false });
+    box.addEventListener("dblclick", resetZoom);
+    box.addEventListener("pointerdown", function (ev) {
+      if (!view || !view.svg || ev.button > 0) return;
+      pts[ev.pointerId] = { x: ev.clientX };
+      try { box.setPointerCapture(ev.pointerId); } catch (e) { /* synthetic pointers */ }
+      if (count() === 2) {
+        var ks = Object.keys(pts);
+        pinch = { d: Math.abs(pts[ks[0]].x - pts[ks[1]].x) || 1, range: { lo: view.range.lo, hi: view.range.hi } };
+        drag = null;
+      } else {
+        var pan = ev.shiftKey || ev.pointerType === "touch";
+        drag = { x0: svgX(ev), pan: pan, range: { lo: view.range.lo, hi: view.range.hi }, moved: false };
+      }
+    });
+    box.addEventListener("pointermove", function (ev) {
+      if (!view || !view.svg) return;
+      if (pts[ev.pointerId]) pts[ev.pointerId].x = ev.clientX;
+      if (pinch && count() === 2) {
+        var ks = Object.keys(pts), d = Math.abs(pts[ks[0]].x - pts[ks[1]].x) || 1;
+        var mid = (pts[ks[0]].x + pts[ks[1]].x) / 2, rc = view.svg.getBoundingClientRect();
+        var center = pinch.range.lo + ((mid - rc.left) / rc.width * W - PAD.l) / IW * (pinch.range.hi - pinch.range.lo);
+        view.range = L.zoomRange(pinch.range, pinch.d / d, center, view.bounds);
+        drawPlot();
+        return;
+      }
+      if (drag) {
+        var x = svgX(ev);
+        if (Math.abs(x - drag.x0) > 3) drag.moved = true;
+        if (drag.pan) {
+          var dmz = (drag.x0 - x) / IW * (drag.range.hi - drag.range.lo);
+          view.range = L.panRange(drag.range, dmz, view.bounds);
+          drawPlot();
+          drag.x0 = x; drag.range = { lo: view.range.lo, hi: view.range.hi };
+        } else {
+          var sel = $("selrect");
+          var x1 = Math.max(PAD.l, Math.min(drag.x0, x)), x2 = Math.min(PAD.l + IW, Math.max(drag.x0, x));
+          sel.setAttribute("x", x1); sel.setAttribute("width", Math.max(0, x2 - x1));
+          sel.setAttribute("visibility", "visible");
+        }
+        return;
+      }
+      var hit = nearest(ev);
+      if (hit) showTip(hit); else hideTip();
+    });
+    function end(ev) {
+      if (!view) return;
+      if (drag && !drag.pan && drag.moved && count() === 1) {
+        var a = mzOf(Math.max(PAD.l, Math.min(drag.x0, svgX(ev)))), b = mzOf(Math.min(PAD.l + IW, Math.max(drag.x0, svgX(ev))));
+        if (b - a > (view.bounds.hi - view.bounds.lo) * 1e-4) {
+          view.range = { lo: Math.max(view.bounds.lo, a), hi: Math.min(view.bounds.hi, b) };
+          drawPlot();
+        }
+      }
+      delete pts[ev.pointerId];
+      if (count() < 2) pinch = null;
+      if (!count()) drag = null;
+      var sel = $("selrect");
+      if (sel) sel.setAttribute("visibility", "hidden");
+    }
+    box.addEventListener("pointerup", end);
+    box.addEventListener("pointercancel", end);
+    box.addEventListener("pointerleave", function () { if (!drag) hideTip(); });
+    box.addEventListener("keydown", function (ev) {
+      if (ev.target !== box) return;
+      var k = ev.key;
+      if (k === "+" || k === "=") zoomBy(0.7);
+      else if (k === "-" || k === "_") zoomBy(1 / 0.7);
+      else if (k === "ArrowLeft") panBy(-0.2);
+      else if (k === "ArrowRight") panBy(0.2);
+      else if (k === "0" || k === "Home") resetZoom();
+      else return;
+      ev.preventDefault();
+    });
+    $("zoomin").addEventListener("click", function () { zoomBy(0.7); });
+    $("zoomout").addEventListener("click", function () { zoomBy(1 / 0.7); });
+    $("panleft").addEventListener("click", function () { panBy(-0.25); });
+    $("panright").addEventListener("click", function () { panBy(0.25); });
+    $("zoomreset").addEventListener("click", resetZoom);
   }
 
   function fillTable(ions) {
@@ -293,6 +429,8 @@ if (typeof module !== "undefined") {
     selected = i;
     var rec = last.records[i], info = $("plotinfo");
     $("plot").textContent = "";
+    view = null;
+    $("range").textContent = "";
     $("table").tBodies[0].textContent = "";
     if (!rec || rec.error || !rec.total || !rec.mode) {
       info.textContent = rec && rec.error ? "Record " + (i + 1) + " was not cleaned (" + rec.error + "); nothing to plot." : "";
@@ -304,7 +442,7 @@ if (typeof module !== "undefined") {
     var token = last;
     postJson("/v1/classify", body).then(function (x) {
       if (token !== last || selected !== i) return;
-      if (x.r.status === 200 && x.j) { drawPlot(x.j); fillTable(x.j.ions); }
+      if (x.r.status === 200 && x.j) { setPlot(x.j); fillTable(x.j.ions); }
       else info.textContent = "Could not plot record " + (i + 1) + ": " + detailOf(x);
     }).catch(function () { info.textContent = "Could not plot record " + (i + 1) + ": service not reachable."; });
   }
@@ -349,6 +487,7 @@ if (typeof module !== "undefined") {
     reader.readAsText(file);
   }
 
+  setupPlotEvents();
   $("form").addEventListener("submit", clean);
   $("cancel").addEventListener("click", function () {
     if (job) { job.cancelled = true; job.controller.abort(); }
