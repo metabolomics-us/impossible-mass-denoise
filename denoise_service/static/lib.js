@@ -132,6 +132,34 @@
     return name + ".cleaned." + ext;
   }
 
+  /* Download name: `<name>.cleaned.<ext>`, or `<name>.partial.<ext>` when records are missing. */
+  function outputFilename(name, format, partial) {
+    var tag = partial ? ".partial" : ".cleaned";
+    var ext = { msp: "msp", mgf: "mgf" }[format] || "txt";
+    if (!name) return (partial ? "partial." : "cleaned.") + ext;
+    var dot = name.lastIndexOf(".");
+    if (dot > 0) return name.slice(0, dot) + tag + name.slice(dot);
+    return name + tag + "." + ext;
+  }
+
+  function partialNote(missing, total) {
+    if (!(missing > 0)) return "";
+    return missing + " of " + total + " records are missing from this output (not processed).";
+  }
+
+  /* A single record the server refuses as too large cannot be split further. */
+  function isRecordTooLarge(status, count) {
+    return (status === 413 || status === 422) && count <= 1;
+  }
+
+  /* The /v1/convert result for one record left exactly as it came in. */
+  function passThroughResult(raw, format) {
+    return { format: format, text: raw,
+             records: [{ index: 0, name: null, total: 0, impossible: 0,
+                         error: "passed through: too large", mode: null, precursor_mz: null }],
+             summary: { records: 1, cleaned: 0, passed_through: 1, peaks: 0, impossible: 0 } };
+  }
+
   /* A range {lo, hi} scaled by `factor` (< 1 zooms in) about `center`, kept inside `bounds`. */
   function zoomRange(range, factor, center, bounds) {
     var span = (range.hi - range.lo) * factor;
@@ -167,7 +195,9 @@
 
   var api = { byteLen: byteLen, detectKind: detectKind, splitRecords: splitRecords,
               packRanges: packRanges, splitIntoChunks: splitIntoChunks, peakText: peakText,
-              cleanedFilename: cleanedFilename, zoomRange: zoomRange, panRange: panRange,
+              cleanedFilename: cleanedFilename,
+              outputFilename: outputFilename, partialNote: partialNote,
+              isRecordTooLarge: isRecordTooLarge, passThroughResult: passThroughResult, zoomRange: zoomRange, panRange: panRange,
               niceTicks: niceTicks };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.DenoiseLib = api;

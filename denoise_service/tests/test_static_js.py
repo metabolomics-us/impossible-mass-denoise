@@ -138,3 +138,30 @@ def test_lib_js_served_with_page_headers():
         r = c.get("/static/lib.js")
         assert r.status_code == 200 and "javascript" in r.headers["content-type"]
         assert r.headers["content-security-policy"].startswith("default-src 'self'")
+
+
+@needs_node
+def test_pass_through_result_keeps_the_record_text_and_marks_it_too_large():
+    raw = "Name: big\nNum Peaks: 1\n100.5 3\n"
+    res = js("L.passThroughResult(P[0], P[1])", [raw, "msp"])
+    assert res["text"] == raw and res["format"] == "msp"
+    (rec,) = res["records"]
+    assert rec["error"] == "passed through: too large" and rec["total"] == 0
+    assert res["summary"] == {"records": 1, "cleaned": 0, "passed_through": 1, "peaks": 0,
+                              "impossible": 0}
+    assert js("L.isRecordTooLarge(P[0], P[1])", [413, 1]) is True
+    assert js("L.isRecordTooLarge(P[0], P[1])", [422, 1]) is True
+    assert js("L.isRecordTooLarge(P[0], P[1])", [422, 2]) is False
+    assert js("L.isRecordTooLarge(P[0], P[1])", [429, 1]) is False
+
+
+@needs_node
+def test_partial_download_name_and_summary():
+    f = lambda n, fmt, partial: js("L.outputFilename(P[0], P[1], P[2])", [n, fmt, partial])  # noqa
+    assert f("sample.msp", "msp", False) == "sample.cleaned.msp"
+    assert f("sample.msp", "msp", True) == "sample.partial.msp"
+    assert f("notes", "strings", True) == "notes.partial.txt"
+    assert f("", "mgf", True) == "partial.mgf"
+    note = js("L.partialNote(P[0], P[1])", [3, 10])
+    assert "3 of 10" in note and "missing" in note
+    assert js("L.partialNote(P[0], P[1])", [0, 10]) == ""

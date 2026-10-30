@@ -303,6 +303,10 @@
       return postJson("/v1/convert", body, ctx.job.controller.signal).then(function (x) {
         if (x.r.status === 200 && x.j) { onDone(from, to, x.j); return; }
         var st = x.r.status;
+        if (L.isRecordTooLarge(st, to - from)) {
+          onDone(from, to, L.passThroughResult(ctx.groups[from], ctx.kind));
+          return;
+        }
         if ((st === 413 || st === 422) && to - from > 1) {
           var mid = from + Math.ceil((to - from) / 2);
           return convertRange(ctx, from, mid, onDone).then(function () { return convertRange(ctx, mid, to, onDone); });
@@ -355,7 +359,8 @@
       });
       if (records.length) {
         last = { kind: kind, groups: groups, format: format, text: out.join(""), records: records,
-                 summary: summary, name: source ? source.name : "", partial: partial, opts: opts };
+                 summary: summary, name: source ? source.name : "", partial: partial, opts: opts,
+                 missing: groups.length - done, total: groups.length };
         renderResult();
       }
     }
@@ -389,7 +394,7 @@
                s.passed_through + " passed through unchanged. " + s.impossible + " of " + s.peaks + " ions removed.";
     var p = problems(last);
     if (p.length) line += " Not cleaned: " + p.join(", ") + (p.join().indexOf("no ion mode") >= 0 ? " (choose a polarity above and run again)." : ".");
-    if (last.partial) line += " Output is partial.";
+    if (last.partial) line += " Output is partial: " + L.partialNote(last.missing, last.total);
     $("summary").textContent = line;
     fillRecords();
     $("copystatus").textContent = "";
@@ -463,7 +468,7 @@
     var blob = new Blob([last.text], { type: "text/plain;charset=utf-8" });
     var url = URL.createObjectURL(blob), a = document.createElement("a");
     a.href = url;
-    a.download = L.cleanedFilename(last.name, last.format);
+    a.download = L.outputFilename(last.name, last.format, last.missing > 0);
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
