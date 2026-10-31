@@ -359,6 +359,12 @@ Annotated peak lines such as `181.07 10 "C6H13O6+"` (NIST and MassBank style: m/
 annotation text, quoted or bare) are supported only in MSP and MGF records. Each is one peak and is kept
 or removed whole, annotation included; `/v1/classify` does not accept annotations.
 
+The page streams files up to 1 GiB: it reads the file in 4 MiB slices, cuts it into records on the fly,
+and sends requests of at most 100 records / 400 KB, three at a time, appending the results in file order.
+The default rate limit (`rate_per_minute: 900`, `rate_burst: 60`) is sized for that: the single worker
+does about 10 such requests per second, and the former 120 per minute would have stretched 1 GiB to over
+an hour. `max_body_bytes`, `max_inflight_per_client` and `max_pending` stay as they were.
+
 The public URL is https://denoise.metabolomics.us. Deployment (nginx, DNS, the systemd unit) is in
 [ops/deploy/README.md](ops/deploy/README.md). The service imports Ziyue's modules unmodified.
 

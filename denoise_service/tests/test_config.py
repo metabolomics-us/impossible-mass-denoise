@@ -30,7 +30,7 @@ def test_defaults_match_proposed_limits():
     assert (c.max_label, c.max_label_lookups) == (12, 200)
     assert (c.max_request_lookups, c.max_pending) == (200000, 8)
     assert (c.max_inflight_per_client, c.max_cache_entries) == (4, 200000)
-    assert (c.rate_per_minute, c.rate_burst, c.cache_clear_seconds) == (120, 30, 3600)
+    assert (c.rate_per_minute, c.rate_burst, c.cache_clear_seconds) == (900, 60, 3600)
     assert c.trusted_proxy is True and c.cors_origins == ["*"]
 
 

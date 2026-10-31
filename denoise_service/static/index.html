@@ -4,92 +4,163 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#022851">
+<meta name="color-scheme" content="light dark">
 <title>Impossible-mass denoise</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<header class="site">
-  <h1>Impossible-mass denoise</h1>
-  <p class="sub">West Coast Metabolomics Center &middot; UC Davis</p>
+<header class="hero">
+  <div class="hero-inner">
+    <p class="brand"><svg class="mark" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true" focusable="false"><rect width="32" height="32" rx="8" fill="#FFBF00"/><path d="M6 25V19M11 25V9M16 25V14M21 25V6M26 25V17" stroke="#022851" stroke-width="2.6" stroke-linecap="round"/></svg>
+      <span>West Coast Metabolomics Center &middot; UC Davis</span></p>
+    <h1>Impossible-mass denoise</h1>
+    <p class="lede">Strip the fragment ions that no combination of carbon, hydrogen, nitrogen, oxygen, phosphorus and sulfur can explain from your mass spectra. Drop in a file of up to 1 GB, or paste a few spectra, and download them cleaned in the same format.</p>
+    <ul class="chips" aria-label="Highlights">
+      <li>MSP, MGF and mz:intensity</li>
+      <li>Files up to 1 GB</li>
+      <li>Streams while it cleans</li>
+    </ul>
+  </div>
 </header>
+
 <main class="layout">
   <section class="input" aria-label="Input">
-    <form id="form" novalidate>
-      <label for="spectrum">Spectra: paste text or load a file (MSP, MGF, or one mz:intensity string per line)</label>
-      <textarea id="spectrum" rows="9" spellcheck="false" placeholder="86.06:45 104.11:100 ..."></textarea>
-
-      <div class="row filerow">
+    <form id="form" class="card" novalidate>
+      <h2 class="step"><span class="num" aria-hidden="true">1</span> Add your spectra</h2>
+      <div id="dropzone" class="dropzone">
         <input type="file" id="file" accept=".msp,.mgf,.txt,text/plain">
-        <label class="filebtn" for="file">Load a file (.msp .mgf .txt)</label>
-        <span id="filename" class="muted"></span>
+        <label class="dropface" for="file">
+          <svg class="dropicon" viewBox="0 0 48 48" width="44" height="44" aria-hidden="true" focusable="false"><path d="M24 33V11m0 0-8 8m8-8 8 8M10 33v3a4 4 0 0 0 4 4h20a4 4 0 0 0 4-4v-3" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span class="droptitle">Drop a file here, or <span class="link">browse</span></span>
+          <span class="dropsub">MSP, MGF or text, up to 1 GB. Large files are read and cleaned in pieces.</span>
+        </label>
+      </div>
+      <div id="filechip" class="filechip" hidden>
+        <span class="fileicon" aria-hidden="true">&#9679;</span>
+        <span id="filename" class="filename"></span>
+        <button type="button" id="clearfile" class="secondary small" aria-label="Remove the loaded file">Remove</button>
       </div>
 
-      <div class="row opts">
-        <span class="optgroup" role="radiogroup" aria-label="Polarity, used when a record does not say">
-          <span class="optlabel">Polarity</span>
-          <label class="inline"><input type="radio" name="mode" value="neg"> neg</label>
-          <label class="inline"><input type="radio" name="mode" value="pos"> pos</label>
-        </span>
-        <label class="inline"><input type="checkbox" id="halogens"> Halogens</label>
-        <label class="inline" for="precursor">Precursor m/z
-          <input type="text" inputmode="decimal" id="precursor" size="8"></label>
+      <label for="spectrum" class="fieldlabel">Or paste spectra (MSP, MGF, or one mz:intensity string per line)</label>
+      <textarea id="spectrum" rows="6" spellcheck="false" placeholder="86.06:45 104.11:100 ..."></textarea>
+
+      <h2 class="step"><span class="num" aria-hidden="true">2</span> Options</h2>
+      <div class="opts">
+        <div class="seg" role="radiogroup" aria-label="Polarity, used when a record does not say">
+          <span class="optlabel" aria-hidden="true">Polarity</span>
+          <span class="segbtns">
+            <label class="segopt"><input type="radio" name="mode" value="" checked><span>From file</span></label>
+            <label class="segopt"><input type="radio" name="mode" value="neg"><span>Negative</span></label>
+            <label class="segopt"><input type="radio" name="mode" value="pos"><span>Positive</span></label>
+          </span>
+        </div>
+        <label class="toggle"><input type="checkbox" id="halogens" role="switch"><span class="track" aria-hidden="true"></span><span>Include halogens (F, Cl, Br, I)</span></label>
+        <label class="field" for="precursor"><span class="optlabel">Precursor m/z</span>
+          <input type="text" inputmode="decimal" id="precursor" size="8" placeholder="optional"></label>
+        <label class="toggle" id="savetoggle" hidden><input type="checkbox" id="streamsave" role="switch"><span class="track" aria-hidden="true"></span><span>Write straight to a file (best for very large files)</span></label>
       </div>
 
-      <div class="row">
-        <button type="submit" id="go">Clean</button>
+      <div class="actions primary-actions">
+        <button type="submit" id="go" class="primary">Clean spectra</button>
         <button type="button" id="cancel" class="secondary" hidden>Cancel</button>
       </div>
-      <p id="progress" class="muted" role="status" aria-live="polite"></p>
+
+      <div id="runpanel" class="runpanel" hidden>
+        <div id="bar" class="bar" role="progressbar" aria-label="Cleaning progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="barfill" class="barfill"></div></div>
+        <p id="readline" class="muted"></p>
+        <dl class="stats mini">
+          <div><dt>Records</dt><dd id="st-records">0</dd></div>
+          <div><dt>Speed</dt><dd id="st-speed">&ndash;</dd></div>
+          <div><dt>Time left</dt><dd id="st-eta">&ndash;</dd></div>
+          <div><dt>Format</dt><dd id="st-kind">&ndash;</dd></div>
+        </dl>
+      </div>
+      <p id="progress" class="muted status" role="status" aria-live="polite"></p>
       <p id="message" role="alert" class="message" hidden></p>
     </form>
-    <details class="caveat">
-      <summary>Impossible means not explained by CHNOPS (details)</summary>
-      <p>Impossible means not explained by CHNOPS, singly charged, monoisotopic. Works for Orbitrap data; off by default for TTOF; not for QTOF. Ions above 1700 m/z are always reported possible.</p>
-    </details>
-    <p class="muted"><a href="/docs">API docs</a> &middot; <a href="/openapi.json">OpenAPI JSON</a></p>
   </section>
 
-  <section id="result" class="output" aria-label="Result" aria-live="polite" hidden>
-    <p id="summary" class="summary"></p>
-    <div class="actions">
-      <button type="button" id="download" class="secondary">Download cleaned</button>
-      <button type="button" id="copycleaned" class="secondary">Copy cleaned</button>
-      <button type="button" id="copy" class="secondary">Copy as JSON</button>
-      <span id="copystatus" class="muted"></span>
+  <section class="outcol">
+    <div id="empty" class="card empty">
+      <h2>Results appear here</h2>
+      <p class="muted">You get a summary, a zoomable plot of any record with the impossible ions marked in red, and the cleaned file to download.</p>
     </div>
-    <p id="plotinfo" class="muted"></p>
-    <div class="plotbar" role="group" aria-label="Plot zoom">
-      <button type="button" id="zoomin" class="secondary small" aria-label="Zoom in">+</button>
-      <button type="button" id="zoomout" class="secondary small" aria-label="Zoom out">&minus;</button>
-      <button type="button" id="panleft" class="secondary small" aria-label="Pan left">&larr;</button>
-      <button type="button" id="panright" class="secondary small" aria-label="Pan right">&rarr;</button>
-      <button type="button" id="zoomreset" class="secondary small">Reset</button>
-      <span id="range" class="muted"></span>
-    </div>
-    <div id="plot" tabindex="0" role="group" aria-label="Stick plot of ion intensity against m/z. Plus and minus zoom, left and right arrows pan, 0 resets."></div>
-    <p class="legend"><span class="sw possible"></span> Possible <span id="npossible"></span>
-      <span class="sw impossible"></span> Not explained by CHNOPS <span id="nimpossible"></span>
-      <span class="muted">Wheel or drag to zoom, shift-drag to pan, double-click to reset.</span></p>
-    <details>
-      <summary>Records</summary>
-      <div class="scroll">
-        <table id="records">
-          <thead><tr><th scope="col">#</th><th scope="col">Name</th><th scope="col">Ions</th><th scope="col">Impossible</th><th scope="col">Status</th><th scope="col"><span class="sr">Plot</span></th></tr></thead>
-          <tbody></tbody>
-        </table>
+    <section id="result" class="card output" aria-label="Result" aria-live="polite" hidden>
+      <h2>Result</h2>
+      <dl class="stats cards">
+        <div class="stat"><dt>Records</dt><dd id="s-records">0</dd></div>
+        <div class="stat"><dt>Cleaned</dt><dd id="s-cleaned">0</dd></div>
+        <div class="stat"><dt>Passed through</dt><dd id="s-passed">0</dd></div>
+        <div class="stat accent"><dt>Ions removed</dt><dd id="s-removed">0%</dd><dd id="s-removed-n" class="sub"></dd></div>
+      </dl>
+      <p id="summary" class="summary"></p>
+      <div class="actions">
+        <button type="button" id="download" class="primary">Download cleaned</button>
+        <button type="button" id="savefile" class="secondary" hidden>Save cleaned file</button>
+        <button type="button" id="copycleaned" class="secondary">Copy cleaned</button>
+        <button type="button" id="copy" class="secondary">Copy as JSON</button>
+        <span id="copystatus" class="muted"></span>
       </div>
-    </details>
-    <details>
-      <summary>Ions of the plotted record</summary>
-      <div class="scroll">
-        <table id="table">
-          <thead><tr><th scope="col">m/z</th><th scope="col">Intensity</th><th scope="col">Verdict</th></tr></thead>
-          <tbody></tbody>
-        </table>
+
+      <div class="plotpanel">
+        <h3>Spectrum plot</h3>
+        <p id="plotinfo" class="muted"></p>
+        <div class="plotbar" role="group" aria-label="Plot zoom">
+          <button type="button" id="zoomin" class="secondary small" aria-label="Zoom in">+</button>
+          <button type="button" id="zoomout" class="secondary small" aria-label="Zoom out">&minus;</button>
+          <button type="button" id="panleft" class="secondary small" aria-label="Pan left">&larr;</button>
+          <button type="button" id="panright" class="secondary small" aria-label="Pan right">&rarr;</button>
+          <button type="button" id="zoomreset" class="secondary small">Reset</button>
+          <span id="range" class="muted"></span>
+        </div>
+        <div id="plot" tabindex="0" role="group" aria-label="Stick plot of ion intensity against m/z. Plus and minus zoom, left and right arrows pan, 0 resets."></div>
+        <p class="legend"><span class="sw possible"></span> Possible <span id="npossible"></span>
+          <span class="sw impossible"></span> Not explained by CHNOPS <span id="nimpossible"></span>
+          <span class="muted">Wheel or drag to zoom, shift-drag to pan, double-click to reset.</span></p>
       </div>
-    </details>
+
+      <details>
+        <summary>Records</summary>
+        <p id="recordsnote" class="muted"></p>
+        <div class="scroll">
+          <table id="records">
+            <thead><tr><th scope="col">#</th><th scope="col">Name</th><th scope="col">Ions</th><th scope="col">Impossible</th><th scope="col">Status</th><th scope="col"><span class="sr">Plot</span></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </details>
+      <details>
+        <summary>Ions of the plotted record</summary>
+        <div class="scroll">
+          <table id="table">
+            <thead><tr><th scope="col">m/z</th><th scope="col">Intensity</th><th scope="col">Verdict</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </details>
+    </section>
   </section>
 </main>
+
+<section class="how" aria-label="How it works">
+  <div class="how-inner">
+    <h2>How it works</h2>
+    <ol class="steps">
+      <li><strong>Read.</strong> Your file is read in small pieces and cut into whole spectra, so even a 1 GB file is never held in memory all at once.</li>
+      <li><strong>Check.</strong> Each ion is tested against every formula built from carbon, hydrogen, nitrogen, oxygen, phosphorus and sulfur (optionally halogens) at its mass.</li>
+      <li><strong>Clean.</strong> Ions that no such formula explains are removed. Everything else in the record is kept exactly as it was, in the same format.</li>
+    </ol>
+    <details class="caveat">
+      <summary>What does &ldquo;impossible&rdquo; mean?</summary>
+      <p>Impossible means not explained by CHNOPS, singly charged, monoisotopic. Works for Orbitrap data; off by default for TTOF; not for QTOF. Ions above 1700 m/z are always reported possible.</p>
+    </details>
+  </div>
+</section>
+
+<footer class="site">
+  <p>Impossible-mass denoise &middot; West Coast Metabolomics Center, UC Davis</p>
+  <p><a href="/docs">API docs</a> &middot; <a href="/openapi.json">OpenAPI JSON</a> &middot; <a href="/healthz">Status</a></p>
+</footer>
 <script src="/static/lib.js"></script>
 <script src="/static/app.js"></script>
 </body>

@@ -38,11 +38,13 @@ max_inflight_per_client: 4
 # hostile request cannot grow it without bound (about 200 bytes per entry).
 max_cache_entries: 200000
 
-# Sustained requests per minute allowed per client.
-rate_per_minute: 120
+# Sustained requests per minute allowed per client. The page cleans large files (up to 1 GiB) in
+# many requests of at most 100 records / 400 KB; the single worker does about 10 per second, so
+# 900 keeps the limiter from being the bottleneck.
+rate_per_minute: 900
 
 # Burst capacity: requests a client may make at once before being throttled.
-rate_burst: 30
+rate_burst: 60
 
 # Seconds between clears of the formula cache, so it cannot grow without bound.
 cache_clear_seconds: 3600

@@ -20,7 +20,15 @@ class ConfigError(ValueError):
 
 @dataclass(frozen=True)
 class Config:
-    """Service settings; defaults are the proposed public limits."""
+    """Service settings; defaults are the proposed public limits.
+
+    Rate limits: the page cleans a file in requests of at most 100 records / 400 KB, and the single
+    worker handles about 10 of them per second (roughly 1 MB/s of MSP). A 1 GiB file is therefore
+    some 2,700 to 10,000 requests; at the old 120 per minute that would take over an hour, so the
+    defaults are 900 per minute sustained (15 per second, above the worker's own pace so the limiter
+    is not the bottleneck) with a burst of 60. Throughput stays bounded by `max_pending`,
+    `max_inflight_per_client` and `max_body_bytes`, which are unchanged.
+    """
     host: str = "127.0.0.1"
     port: int = 8300
     max_peaks: int = 5000
@@ -32,8 +40,8 @@ class Config:
     max_pending: int = 8
     max_inflight_per_client: int = 4
     max_cache_entries: int = 200000
-    rate_per_minute: int = 120
-    rate_burst: int = 30
+    rate_per_minute: int = 900
+    rate_burst: int = 60
     cache_clear_seconds: int = 3600
     trusted_proxy: bool = True
     cors_origins: List[str] = field(default_factory=lambda: ["*"])
