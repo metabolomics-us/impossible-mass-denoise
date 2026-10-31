@@ -52,3 +52,13 @@ def test_bucket_rejects_nonpositive_settings():
         TokenBucket(rate_per_minute=0, burst=1)
     with pytest.raises(ValueError):
         TokenBucket(rate_per_minute=1, burst=0)
+
+
+def test_default_config_sustains_a_large_file_cleaning_pace():
+    from denoise_service.config import Config
+    c = Config()
+    b = TokenBucket(c.rate_per_minute, c.rate_burst)
+    assert sum(b.allow("a", 0.0)[0] for _ in range(100)) == 60
+    # 10 requests per second (the worker's pace) for a minute is never throttled
+    ok = [b.allow("a", 1.0 + i * 0.1)[0] for i in range(600)]
+    assert all(ok[1:])
