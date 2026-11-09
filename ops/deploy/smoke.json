@@ -1,86 +1,90 @@
 {
-  "fingerprint": "5aae4ec26694da4d",
+ "fingerprint": "5aae4ec26694da4d",
+ "request": {
+  "mode": "pos",
+  "peaks": [
+   [
+    181.0707,
+    100
+   ],
+   [
+    100.5,
+    20
+   ],
+   [
+    123.9,
+    5
+   ],
+   [
+    85.0284,
+    40
+   ]
+  ]
+ },
+ "expect": [
+  true,
+  false,
+  false,
+  true
+ ],
+ "mcp": {
+  "protocol": "2025-11-25",
+  "note": "Same peaks as the REST smoke request above, sent to the denoise_mcp tool clean_spectrum. The expectation is written against the structuredContent the endpoint puts on the wire -- summary / removed / kept / kept_omitted / answer_bytes -- not against the library's internal summary dict: the counts live under 'summary', the removals are the 'removed' list, and 'kept' is null unless include_kept=true. Both verdicts must occur: a smoke test that cannot fail proves nothing. Asserted against a real --stateless server by denoise_mcp/tests/test_deploy_contract.py.",
   "request": {
-    "mode": "pos",
-    "peaks": [
-      [
-        181.0707,
-        100
-      ],
-      [
-        100.5,
-        20
-      ],
-      [
-        123.9,
-        5
-      ],
-      [
-        85.0284,
-        40
-      ]
+   "mode": "pos",
+   "peaks": [
+    [
+     181.0707,
+     100.0
+    ],
+    [
+     100.5,
+     20.0
+    ],
+    [
+     123.9,
+     5.0
+    ],
+    [
+     85.0284,
+     40.0
     ]
+   ]
   },
-  "expect": [
-    true,
-    false,
-    false,
-    true
-  ],
-  "mcp": {
-    "protocol": "2025-11-25",
-    "note": "Same peaks as the REST smoke request above, sent to the denoise_mcp tool clean_spectrum. Expect both verdicts: a smoke test that cannot fail proves nothing.",
-    "request": {
-      "mode": "pos",
-      "peaks": [
-        [
-          181.0707,
-          100.0
-        ],
-        [
-          100.5,
-          20.0
-        ],
-        [
-          123.9,
-          5.0
-        ],
-        [
-          85.0284,
-          40.0
-        ]
-      ]
+  "expect": {
+   "both_verdicts_required": true,
+   "summary": {
+    "mode": "pos",
+    "total": 4,
+    "kept": 2,
+    "removed": 2,
+    "fingerprint": "5aae4ec26694da4d"
+   },
+   "kept_without_include_kept": null,
+   "kept_with_include_kept": [
+    181.0707,
+    85.0284
+   ],
+   "removed": [
+    {
+     "mz": 100.5,
+     "reasons_subset": [
+      "nearest-legal-below",
+      "possible-as-doubly-charged"
+     ],
+     "nearest_legal_mz": 100.12465194171052
     },
-    "expect": {
-      "kept": 2,
-      "kept_mz": [
-        181.0707,
-        85.0284
-      ],
-      "removed": 2,
-      "removed_mz": [
-        100.5,
-        123.9
-      ],
-      "peaks": [
-        {
-          "mz": 100.5,
-          "reasons": [
-            "nearest-legal-below",
-            "possible-as-doubly-charged"
-          ],
-          "nearest_legal_mz": 100.12465194171052
-        },
-        {
-          "mz": 123.9,
-          "reasons": [
-            "nearest-legal-below",
-            "legal-within-10mDa",
-            "needs-halogen-alphabet"
-          ],
-          "nearest_legal_mz": 123.89449747463188
-        }
-      ]
+    {
+     "mz": 123.9,
+     "reasons_subset": [
+      "nearest-legal-below",
+      "legal-within-10mDa",
+      "needs-halogen-alphabet"
+     ],
+     "nearest_legal_mz": 123.89449747463188
     }
-  }
+   ]
+  },
+  "wire_note": "Each 'removed' entry also carries intensity, narrative and nearest_legal_mDa; the answer carries its own answer_bytes and, when it would not fit whole, answer_oversized naming the max_peaks/max_result_bytes pair that would."
+ }
 }

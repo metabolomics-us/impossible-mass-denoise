@@ -234,8 +234,27 @@ curl -s https://denoise.mcp.metabolomics.us/mcp \
   | head -5                              # an SSE frame: event: message / data: {...protocolVersion...}
 ```
 
-Then call `clean_spectrum` with `smoke.json`'s `mcp.request` and check the summary against
-`mcp.expect` (2 kept, 2 removed, and the removal reasons the code in this commit produces). The
+Then call `clean_spectrum` with `smoke.json`'s `mcp.request` and check the answer against
+`mcp.expect`. The keys are the ones the endpoint actually returns: `structuredContent.summary` holds
+the counts (`2` kept, `2` removed) and the fingerprint, `structuredContent.removed` is the list of
+removals with their reasons, and `structuredContent.kept` is `null` until you ask for it with
+`include_kept: true`.
+
+```bash
+curl -sS --max-time 30 -X POST https://denoise.mcp.metabolomics.us/mcp \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"clean_spectrum","arguments":{"mode":"pos","peaks":[[181.0707,100.0],[100.5,20.0],[123.9,5.0],[85.0284,40.0]]}}}' \
+  | sed -n 's/^data: //p' \
+  | python3 -c 'import json,sys; s=json.load(sys.stdin)["result"]["structuredContent"]; print(s["summary"]["kept"], s["summary"]["removed"], s["summary"]["fingerprint"], s["kept"], [p["mz"] for p in s["removed"]], s["answer_bytes"])'
+    # 2 2 5aae4ec26694da4d None [100.5, 123.9] 1438
+```
+
+That `None` for `kept` is the right answer, not a fault: the kept peaks are opt-in because that list
+is the part of an answer a caller rarely needs and the part that overflows a harness, and the same
+reply says so in `kept_omitted` (`include_kept=true would add 2 peaks (~74 bytes as JSON)`).
+`denoise_mcp/tests/test_deploy_contract.py` walks this same expectation against a real `--stateless`
+server on a socket, so the file and the wire cannot drift apart again without a test naming it. The
 fingerprint check that protects the REST release applies here too: `denoise-mcp` logs the table
 fingerprint at startup, `ops/deploy/smoke.json` records the expected one, and
 `python -m denoise_mcp --expect-fingerprint <fp>` refuses to start on a mismatch — a way to prove a
