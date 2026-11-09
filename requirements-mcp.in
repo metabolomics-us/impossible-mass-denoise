@@ -1,0 +1,12 @@
+# The MCP surface (denoise_mcp) runs on its own interpreter: the MCP SDK needs Python >= 3.10,
+# while the REST service on these nodes runs on the system Python 3.9. Nothing from
+# requirements-service.in belongs here, and nothing here belongs there; the only thing they share
+# is numpy and the byte-pinned tables the core filter loads.
+#
+# Compiled for 3.12 (the deploy venv):
+#   uv pip compile requirements-mcp.in --python-version 3.12 \
+#      --python-platform x86_64-manylinux_2_28 --generate-hashes --only-binary :all: \
+#      -o requirements-mcp.lock
+numpy>=1.21
+mcp>=2.3
+uvicorn>=0.30

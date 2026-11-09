@@ -26,5 +26,61 @@
     false,
     false,
     true
-  ]
+  ],
+  "mcp": {
+    "protocol": "2025-11-25",
+    "note": "Same peaks as the REST smoke request above, sent to the denoise_mcp tool clean_spectrum. Expect both verdicts: a smoke test that cannot fail proves nothing.",
+    "request": {
+      "mode": "pos",
+      "peaks": [
+        [
+          181.0707,
+          100.0
+        ],
+        [
+          100.5,
+          20.0
+        ],
+        [
+          123.9,
+          5.0
+        ],
+        [
+          85.0284,
+          40.0
+        ]
+      ]
+    },
+    "expect": {
+      "kept": 2,
+      "kept_mz": [
+        181.0707,
+        85.0284
+      ],
+      "removed": 2,
+      "removed_mz": [
+        100.5,
+        123.9
+      ],
+      "peaks": [
+        {
+          "mz": 100.5,
+          "reasons": [
+            "nearest-legal-below",
+            "possible-as-doubly-charged"
+          ],
+          "nearest_legal_mz": 100.12465194171052
+        },
+        {
+          "mz": 123.9,
+          "reasons": [
+            "nearest-legal-below",
+            "legal-within-10mDa",
+            "needs-halogen-alphabet"
+          ],
+          "nearest_legal_mz": 123.89449747463188
+        }
+      ]
+    }
+  }
 }

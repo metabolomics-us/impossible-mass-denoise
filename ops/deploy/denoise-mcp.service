@@ -1,0 +1,44 @@
+[Unit]
+Description=Impossible-mass denoise MCP server (Model Context Protocol over streamable HTTP)
+Documentation=https://denoise.mcp.metabolomics.us/mcp
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=denoise
+Group=denoise
+
+# The app is the checked-out tree; the venv is its own and is NOT the REST service's venv.
+# The MCP SDK needs Python >= 3.10 while the nodes run the REST service on the system Python 3.9,
+# so the two surfaces are installed and upgraded separately. Building this venv from
+# requirements-mcp.lock (hashes, --only-binary) is part of the release, not of this unit.
+WorkingDirectory=/opt/denoise-mcp/app
+ExecStart=/opt/denoise-mcp/venv/bin/python -B -m denoise_mcp --host 127.0.0.1 --port 8301 --path /mcp --allowed-host denoise.mcp.metabolomics.us --stateless --cache-clear-seconds 3600
+Restart=always
+RestartSec=2
+
+# Listens on loopback only; nginx (ops/deploy/nginx-denoise-mcp.conf) is the public face and is
+# what terminates TLS. --stateless means no server-side session to keep, so a worker restart costs
+# a client nothing but a new initialize.
+#
+# --allowed-host is not decoration: without it the server serves whoever asks, and a browser
+# pointed at a domain that resolves to 127.0.0.1 would reach this endpoint (DNS rebinding).
+#
+# The fingerprint check (--expect-fingerprint) is deliberately NOT pinned here. The release's
+# readiness probe compares the running fingerprint with ops/deploy/smoke.json and rolls back on a
+# mismatch; pinning it a second time would make a legitimate table refresh fail at systemd start
+# instead of at the probe that knows how to undo it.
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+MemoryMax=1G
+# A 5000-peak clean with explanations is CPU work; cap it so one caller cannot starve the REST
+# service on the same host. Raise this with max_peaks if the limits are lifted.
+CPUQuota=150%
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target

@@ -368,6 +368,67 @@ an hour. `max_body_bytes`, `max_inflight_per_client` and `max_pending` stay as t
 The public URL is https://denoise.metabolomics.us. Deployment (nginx, DNS, the systemd unit) is in
 [ops/deploy/README.md](ops/deploy/README.md). The service imports Ziyue's modules unmodified.
 
+## MCP server
+
+`denoise_mcp/` exposes the same filter as a [Model Context Protocol](https://modelcontextprotocol.io)
+server, for agents and IDE clients that speak MCP instead of REST:
+**https://denoise.mcp.metabolomics.us/mcp** (streamable HTTP). It codes against the same
+`denoise` / `impossible_mass_denoise` modules as the REST service, so a verdict is identical on both
+surfaces; the MCP package never modifies them.
+
+```
+python -m denoise_mcp --stdio                                  # local, speaks MCP on stdin/stdout
+python -m denoise_mcp --host 127.0.0.1 --port 8301 --stateless \
+    --allowed-host denoise.mcp.metabolomics.us                 # hosted, behind nginx
+```
+
+| Tool | Purpose |
+| --- | --- |
+| `clean_spectrum` | Clean one spectrum: summary first, then every removed peak with its reason |
+| `clean_batch` | Clean many spectra, reporting `SPECTRUM index=n total=m` as each one finishes |
+| `explain_ion` | One m/z: is it possible, and if not why |
+| `service_info` | Table fingerprint and ceiling, and every limit that will reject a request |
+
+Resource: `denoise://reason-codes` — every reason code and what it means, generated from the code
+that emits them (`python -m denoise_mcp.gen_codebook`).
+
+**Every removal is explained.** A reason code is something this build actually checked, not a label:
+`needs-halogen-alphabet` (the mass is reachable only with F/Cl/Br/I, so a bromide adduct looks like
+noise until `halogens=true`), `possible-as-doubly-charged`, `consistent-with-label-carbon13` (a whole
+label step above a legal mass — set `carbon13=n` for a heavy-isotope standard), `legal-within-10mDa`
+(how far the closest allowed mass is) and `no-legal-ion-nearby`. Each removal also carries the nearest
+legal mass with a signed distance in mDa, and a one-sentence narrative. Codes above the table ceiling
+are never invented: past `table_max_mz` the tables answer possible for every mass, so nothing is
+reported impossible there.
+
+**Summary first, payload on request.** A 5000-peak spectrum's clean list is hundreds of KB and agent
+harnesses truncate large tool results, so the default answer is the summary plus the removals; the
+clean peak list comes back only with `include_kept=true`, and the summary says how many peaks that
+would add.
+
+**It streams.** With `stream=true` (default in `clean_batch`) the server calls MCP
+`report_progress` as it goes — `KEPT 181.0707 100.0`,
+`REMOVED 100.5000 20.0 nearest-legal-below|possible-as-doubly-charged`, and
+`SPECTRUM index=2 total=4 kept=120 removed=8` when a spectrum in a batch finishes — so a long clean
+is never a silent wait. `min_progress_interval_ms` throttles the per-peak lines (a finished spectrum
+is always reported); `explanations=false` in `clean_batch` leaves only those per-spectrum lines.
+nginx must not buffer (`proxy_buffering off`, long `proxy_read_timeout`), which is why the vhost ships
+with this package.
+
+Two opt-in extras cost real work and are capped per request (`max_formula_ions`, `max_model_ions`):
+`formulas=true` returns a formula witness for kept peaks (~500x a verdict), and `model_flags=true`
+names which validity model kept a peak (~200x a verdict) — `lenient-only` and `strict-only` are where
+the two published models disagree, which is where a questionable peak usually sits. A request whose
+explanations would run longer than `max_explanation_work_us` is refused with the cheaper options named
+in the error rather than hanging.
+
+This surface runs in its own virtualenv on Python >= 3.10 (the MCP SDK requires it) while the REST
+service runs on the nodes' Python 3.9, so `requirements-mcp.lock` is separate from
+`requirements-service.lock`. The pure part of the package (`limits.py`, `explain.py`, `clean.py`)
+imports neither MCP nor any web library and stays importable on 3.9. CI runs both gates:
+`ops/ci/test_service.sh` and `ops/ci/test_mcp.sh`. Deployment is in
+[ops/deploy/README.md](ops/deploy/README.md).
+
 ## Provenance
 
 `impossible_mass_denoise.py` is the validated research module, unchanged except that the table path
