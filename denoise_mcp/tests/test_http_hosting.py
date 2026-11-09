@@ -67,6 +67,15 @@ def server():
     s.stop()
 
 
+@pytest.fixture
+def stateless_server():
+    """How the public endpoint actually runs (denoise-mcp.service passes --stateless)."""
+    s = Server("--allowed-host", PUBLIC_HOST, "--allowed-host", "127.0.0.1:*", "--stateless")
+    s.wait_ready()
+    yield s
+    s.stop()
+
+
 def post_raw(port, host, body):
     """One POST with an exact Host header, as a reverse proxy would send it."""
     data = json.dumps(body).encode()
@@ -85,6 +94,86 @@ def post_raw(port, host, body):
             total += len(chunk)
     head, _, body = b"".join(chunks).partition(b"\r\n\r\n")
     return head.decode().split("\r\n"), body.decode(errors="replace")
+
+
+def post_with_headers(port, header_lines, body):
+    """One POST with headers chosen by the test, to measure what a wrong header shape costs."""
+    data = json.dumps(body).encode()
+    req = ("POST /mcp HTTP/1.1\r\n" + "".join(h + "\r\n" for h in header_lines)
+           + "Content-Length: %d\r\nConnection: close\r\n\r\n" % len(data)).encode() + data
+    with socket.create_connection(("127.0.0.1", port), timeout=20) as s:
+        s.sendall(req)
+        chunks = []
+        total = 0
+        while total < 8192:
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+    head, _, body = b"".join(chunks).partition(b"\r\n\r\n")
+    return head.decode().split("\r\n"), body.decode(errors="replace")
+
+
+# What the Accept and Content-Type headers cost, measured against a real hosted server here and
+# against denoise.mcp.metabolomics.us before the guide was written. Everything runs against the
+# --stateless server, because that is how denoise-mcp.service runs the public endpoint. The guide
+# page (denoise_service/static/mcp.html) tells clients these same rules, and
+# denoise_service/tests/test_static_mcp_page.py asserts it keeps telling them; change one side and
+# you must change the other, or the page lies about the endpoint.
+
+LIST = {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
+
+
+def post(port, headers, body=LIST):
+    return post_with_headers(port, ["Host: %s" % PUBLIC_HOST] + headers, body)
+
+
+@pytest.mark.parametrize("accept,code", [
+    ("application/json, text/event-stream", "200"),   # what the guide's curl example sends
+    ("*/*", "200"),                                    # what curl sends when you say nothing
+    ("application/json", "406"),                       # naming one of the two is not enough
+    ("text/event-stream", "406"),
+    ("text/plain", "406"),
+])
+async def test_the_accept_header_must_cover_both_media_types(stateless_server, accept, code):
+    lines, body = post(stateless_server.port, ["Content-Type: application/json",
+                                               "Accept: %s" % accept])
+    assert lines[0].startswith("HTTP/1.1 " + code), (accept, lines[0], body[:200])
+    if code == "406":
+        assert "must accept both" in body.lower(), (accept, body[:200])
+    else:
+        assert "tools" in body, (accept, body[:200])
+
+
+async def test_an_absent_accept_header_is_refused_with_406(stateless_server):
+    """Absent is not the same as `*/*`: the endpoint wants the header. curl users never hit this,
+    because curl sends `Accept: */*` unless told otherwise -- which is why a bare curl works and a
+    hand-rolled HTTP client that omits Accept does not."""
+    lines, body = post(stateless_server.port, ["Content-Type: application/json"])
+    assert lines[0].startswith("HTTP/1.1 406"), (lines[0], body[:200])
+
+
+async def test_a_post_without_a_json_content_type_is_refused_with_400(stateless_server):
+    lines, body = post(stateless_server.port, ["Accept: application/json, text/event-stream"])
+    assert lines[0].startswith("HTTP/1.1 400"), (lines[0], body[:200])
+    assert "content-type" in body.lower(), body[:200]
+
+
+async def test_without_the_stateless_flag_every_post_needs_a_session_id(server):
+    """Why denoise-mcp.service passes --stateless: a stateful endpoint answers 400 "Missing session
+    ID" to any POST that did not come from a session it created, so a one-shot client (curl, a
+    script, an agent with no session handling) cannot use it at all."""
+    lines, body = post(server.port, ["Content-Type: application/json",
+                                     "Accept: application/json, text/event-stream"])
+    assert lines[0].startswith("HTTP/1.1 400"), (lines[0], body[:200])
+    assert "session" in body.lower(), body[:200]
+    """A body with no Content-Type is refused before anything is parsed."""
+    lines, body = post_with_headers(
+        server.port, ["Host: %s" % PUBLIC_HOST, "Accept: application/json, text/event-stream"],
+        {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
+    assert lines[0].startswith("HTTP/1.1 400"), (lines[0], body[:200])
+    assert "content-type" in body.lower(), body[:200]
 
 
 INIT = {"jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -196,3 +285,38 @@ def test_a_bad_fingerprint_stops_the_server_before_it_serves_anything():
         cwd=str(ROOT), capture_output=True, text=True, timeout=90)
     assert proc.returncode != 0
     assert "fingerprint" in proc.stderr.lower()
+
+
+# ---------------------------------------------------------------- the GET notification stream
+def test_a_get_on_the_endpoint_opens_the_stream_and_does_not_end(stateless_server):
+    """A `GET` with an SSE Accept is the server-to-client notification stream: 200,
+    `text/event-stream`, and it stays open. This is protocol behaviour, not a stuck server -- and
+    it is exactly why a health check has to POST. The first public probe of
+    https://denoise.mcp.metabolomics.us/mcp used a bare `GET` (curl sends `Accept: */*`, which does
+    cover both media types) and appeared to hang for 20 seconds; nothing was wrong, the probe was
+    holding an open stream.
+
+    Asserting "still open" means asserting a read times out. If the SDK ever starts refusing GET
+    on a stateless endpoint (the spec allows 405 there), this test is where that becomes visible,
+    and the guide page has to say so.
+    """
+    with socket.create_connection(("127.0.0.1", stateless_server.port), timeout=5) as sock:
+        sock.sendall(b"GET /mcp HTTP/1.1\r\n"
+                     b"Host: " + PUBLIC_HOST.encode() + b"\r\n"
+                     b"Accept: application/json, text/event-stream\r\n\r\n")
+        head = b""
+        while b"\r\n\r\n" not in head:
+            chunk = sock.recv(4096)
+            assert chunk, "the server closed a GET it should have kept open: %r" % head
+            head += chunk
+        status, headers = head.split(b"\r\n", 1)[0].decode(), head.split(b"\r\n\r\n")[0].decode()
+        assert status.startswith("HTTP/1.1 200"), status
+        assert "text/event-stream" in status or "content-type: text/event-stream" in headers.lower()
+        sock.settimeout(0.75)
+        try:
+            sock.recv(4096)               # may return a frame; what must NOT happen is a clean close
+            # Data arrived; the next read must be the one that times out.
+            sock.recv(4096)
+            raise AssertionError("the stream ended after two reads; a notification stream stays open")
+        except (TimeoutError, socket.timeout):
+            pass                          # still open after the first byte or after a frame: correct

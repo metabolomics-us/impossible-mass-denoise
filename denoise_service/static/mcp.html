@@ -189,7 +189,7 @@ python3.12 -m venv .venv-mcp
 
     <div class="card prose">
       <h2>By hand, without a client</h2>
-      <p>The transport is JSON-RPC 2.0 over HTTP POST. Two headers matter: <code>Accept</code> must name both <code>application/json</code> and <code>text/event-stream</code>, or the server answers 406; and every request needs an <code>id</code> to get an answer back (without one it is a notification and you get 202 with nothing).</p>
+      <p>The transport is JSON-RPC 2.0 over HTTP POST. Three things matter. <code>Content-Type: application/json</code> is required, and without it the server answers 400. <code>Accept</code> must cover both <code>application/json</code> and <code>text/event-stream</code>: <code>*/*</code> does, naming only one of them does not, and failing that is a 406 (curl sends <code>Accept: */*</code> unless you override it, which is why a bare curl works). And every request needs an <code>id</code> to get an answer back (without one it is a notification and you get 202 with nothing).</p>
       <pre><code>curl -sS https://denoise.mcp.metabolomics.us/mcp \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json, text/event-stream' \
@@ -201,7 +201,9 @@ python3.12 -m venv .venv-mcp
       <details>
         <summary>Trouble</summary>
         <ul>
-          <li><strong>406</strong> &mdash; the <code>Accept</code> header is missing <code>text/event-stream</code>.</li>
+          <li><strong>400</strong> &mdash; <code>Content-Type</code> was missing or not <code>application/json</code>, or the body was not valid JSON-RPC.</li>
+          <li><strong>406</strong> &mdash; the <code>Accept</code> header did not cover both <code>application/json</code> and <code>text/event-stream</code>; naming one of them, or sending no <code>Accept</code> at all, is refused.</li>
+          <li><strong>A <code>GET</code> that never finishes</strong> &mdash; a <code>GET</code> whose <code>Accept</code> offers <code>text/event-stream</code> (and <code>*/*</code> does) opens the server&rsquo;s notification stream: it answers 200 and then stays open, because that stream exists to carry server-to-client messages. That is the protocol working, not a hang. Smoke tests and health checks have to <code>POST</code>.</li>
           <li><strong>421</strong> &mdash; the <code>Host</code> the server saw is not the name it was started for; a proxy must forward the public name.</li>
           <li><strong>413 / 422</strong> &mdash; the body or the request broke a limit named in the message; fix the request, do not retry it.</li>
           <li><strong>A tool answer with <code>isError</code></strong> &mdash; a limit or a bad argument, stated in plain words; this is an ordinary answer, not a protocol failure.</li>
