@@ -56,6 +56,10 @@ shared bucket for everyone.
 `location /` also publishes `/docs` and `/openapi.json`. That is intended: they are the public
 API documentation and expose nothing the API does not already offer.
 
+It also publishes `/mcp`, the *connect an agent* guide (`denoise_service/static/mcp.html`, served by
+the app itself, static HTML with no script of its own). No vhost change is needed for it, and it is
+not the MCP endpoint: that is a different name, `denoise.mcp.metabolomics.us`, below.
+
 ## 2. DNS and TLS
 
 Operator-owned. Create the DNS record for `denoise.metabolomics.us` pointing at whiteale's public
@@ -127,3 +131,71 @@ Use `sudo systemctl disable denoise-service` as well to keep it down across rebo
   contents. Client addresses are not in that line; nginx's access log is still where they live.
 - `ExecStart` uses `python -B`: with `ProtectSystem=strict` the service cannot write
   `__pycache__`, and the write would fail silently (a startup cost only). `-B` is optional.
+
+## 7. The MCP endpoint (`denoise.mcp.metabolomics.us`)
+
+`denoise_mcp/` is a second surface on the same host: the same filter, spoken as Model Context
+Protocol so agents and IDE clients can call it. It listens on `127.0.0.1:8301` and is published as
+`https://denoise.mcp.metabolomics.us/mcp`. It is not part of the automatic `deploy` step yet — the
+nginx vhost, the DNS record and the certificate for this name are operator-owned, as they were for
+the REST service before roles took over.
+
+Two files in this repository describe it: `ops/deploy/nginx-denoise-mcp.conf` (vhost) and
+`ops/deploy/denoise-mcp.service` (unit). The vhost differs from the REST one on purpose: an MCP call
+is a long streamed response, so it needs `proxy_buffering off` and a long `proxy_read_timeout`, or
+progress notifications arrive bundled at the end and long cleans 504.
+
+The vhost serves `/mcp` and nothing else: every other path gets a 404 that names
+https://denoise.metabolomics.us/mcp, where the guide people and agents read lives (on the REST host,
+see section 1). A browser opened on the endpoint address therefore lands on instructions instead of a
+protocol error. Keep this repository's copy of the vhost and the nginx role's copy identical — that
+role owns `conf.d` and rewrites the file.
+
+It gets its own venv, because the MCP SDK needs Python >= 3.10 while the REST service runs on the
+nodes' system Python 3.9:
+
+```bash
+sudo useradd --system --home-dir /opt/denoise-mcp --shell /usr/sbin/nologin denoise  # same user as the service
+sudo mkdir -p /opt/denoise-mcp
+sudo git clone https://github.com/metabolomics-us/impossible-mass-denoise.git /opt/denoise-mcp/app
+sudo python3.12 -m venv /opt/denoise-mcp/venv            # >= 3.10: the MCP SDK refuses 3.9
+sudo /opt/denoise-mcp/venv/bin/pip install -r /opt/denoise-mcp/app/requirements-mcp.lock
+    # regenerate that lock the same way as the service one:
+    # uv pip compile requirements-mcp.in --python-version 3.12 --python-platform x86_64-manylinux_2_28
+    #     --generate-hashes --only-binary :all: -o requirements-mcp.lock
+sudo cp /opt/denoise-mcp/app/ops/deploy/denoise-mcp.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now denoise-mcp
+journalctl -u denoise-mcp -n 20            # expect: "tables loaded: ... fingerprint <fp> | ceiling 1700 Da"
+curl -s http://127.0.0.1:8301/mcp -o /dev/null -w '%{http_code}\n'    # 421 or 406: alive, refusing a bad Host
+```
+
+Every limit `service_info` reports is a flag on the server (`--max-peaks`, `--max-batch`,
+`--max-formula-ions`, `--max-model-ions`, `--max-result-peaks`, `--max-answer-bytes`), so tuning one
+is an `ExecStart` edit and a restart, not a code change. `--max-answer-bytes` refuses values under
+2048, which is what a bare summary costs on the wire: a smaller budget does not squeeze an answer, it
+empties one, and the process says so at startup instead of serving `answer_oversized` to everyone. The
+four work-budget limits (`max_label`, `max_label_lookups`, `max_request_lookups`,
+`max_explanation_work_us`) are deliberately not flags: they bound the CPU one request may buy, and a
+deployment that raises a size limit should not raise that by accident.
+
+Smoke it the way a client does, with the JSON-RPC expectation in `ops/deploy/smoke.json` (`mcp`
+block):
+
+```bash
+curl -s https://denoise.mcp.metabolomics.us/mcp \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' \
+  | head -5                              # an SSE frame: event: message / data: {...protocolVersion...}
+```
+
+Then call `clean_spectrum` with `smoke.json`'s `mcp.request` and check the summary against
+`mcp.expect` (2 kept, 2 removed, and the removal reasons the code in this commit produces). The
+fingerprint check that protects the REST release applies here too: `denoise-mcp` logs the table
+fingerprint at startup, `ops/deploy/smoke.json` records the expected one, and
+`python -m denoise_mcp --expect-fingerprint <fp>` refuses to start on a mismatch — a way to prove a
+release is serving the chemistry you think it is before it takes traffic.
+
+The two surfaces share nothing but the tables, so they can be restarted independently: stopping
+`denoise-mcp` leaves the REST service and the web page untouched, and vice versa. `--stateless` in
+the unit means a restart costs a connected client nothing but a new `initialize`.

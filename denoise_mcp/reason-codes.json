@@ -1,0 +1,61 @@
+{
+  "codes": [
+    "consistent-with-label-carbon13",
+    "consistent-with-label-deuterium",
+    "consistent-with-label-nitrogen15",
+    "legal-within-100mDa",
+    "legal-within-10mDa",
+    "legal-within-300mDa",
+    "legal-within-30mDa",
+    "legal-within-5mDa",
+    "nearest-legal-above",
+    "nearest-legal-below",
+    "needs-halogen-alphabet",
+    "no-legal-ion-nearby",
+    "possible-as-doubly-charged"
+  ],
+  "labels": [
+    [
+      "deuterium",
+      1.0062767458900002
+    ],
+    [
+      "carbon13",
+      1.0033548350700006
+    ],
+    [
+      "nitrogen15",
+      0.9970348944500014
+    ]
+  ],
+  "meaning": {
+    "consistent-with-label-carbon13": "sits above an allowed mass by a whole number of carbon13 labels (1.0034 Da each), which is what a carbon13-labelled ion or its M+1 isotope peak looks like; declare the standard's label count to have the filter accept it",
+    "consistent-with-label-deuterium": "sits above an allowed mass by a whole number of deuterium labels (1.0063 Da each), which is what a deuterium-labelled ion or its M+1 isotope peak looks like; declare the standard's label count to have the filter accept it",
+    "consistent-with-label-nitrogen15": "sits above an allowed mass by a whole number of nitrogen15 labels (0.9970 Da each), which is what a nitrogen15-labelled ion or its M+1 isotope peak looks like; declare the standard's label count to have the filter accept it",
+    "legal-within-100mDa": "an allowed mass exists within 100 mDa, so this ion falls in a gap that makes the model discriminating rather than broken",
+    "legal-within-10mDa": "an allowed mass exists within 10 mDa, so this ion falls in a gap that makes the model discriminating rather than broken",
+    "legal-within-300mDa": "an allowed mass exists within 300 mDa, so this ion falls in a gap that makes the model discriminating rather than broken",
+    "legal-within-30mDa": "an allowed mass exists within 30 mDa, so this ion falls in a gap that makes the model discriminating rather than broken",
+    "legal-within-5mDa": "an allowed mass exists within 5 mDa, so this ion falls in a gap that makes the model discriminating rather than broken",
+    "nearest-legal-above": "m/z of the closest allowed mass, which lies above this ion",
+    "nearest-legal-below": "m/z of the closest allowed mass, which lies below this ion",
+    "needs-halogen-alphabet": "possible only if the halogen alphabet (Cl, F, Br, I) is allowed; the default model excludes it",
+    "no-legal-ion-nearby": "no mass allowed by the selected model lies within 400 mDa of this ion",
+    "possible-as-doubly-charged": "explainable as a doubly charged ion (z=2); the deployed model assumes z=1"
+  },
+  "notes": "A reason code is something this build of the filter actually checked. Codes are per peak and several can apply at once. 'strong' codes name a chemistry the caller could declare to change the verdict; the others only state a distance. Above table_max_mz nothing is ever reported impossible: the tables say possible for every mass there, so a removal that high is a fault, not a verdict.",
+  "strong": [
+    "consistent-with-label-carbon13",
+    "consistent-with-label-deuterium",
+    "consistent-with-label-nitrogen15",
+    "legal-within-100mDa",
+    "legal-within-10mDa",
+    "legal-within-300mDa",
+    "legal-within-30mDa",
+    "legal-within-5mDa",
+    "needs-halogen-alphabet",
+    "possible-as-doubly-charged"
+  ],
+  "table_max_mz": 1700.0,
+  "tolerance_da": 0.005
+}

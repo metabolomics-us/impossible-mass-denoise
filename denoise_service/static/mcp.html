@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#022851">
+<meta name="color-scheme" content="light dark">
+<title>Connect an agent &middot; Impossible-mass denoise</title>
+<meta name="description" content="Call the impossible-mass denoise cleaner from an AI agent or a script over the Model Context Protocol: endpoint, client configuration, tools, answer shape, reason codes and limits.">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="hero">
+  <div class="hero-inner">
+    <p class="brand"><svg class="mark" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true" focusable="false"><rect width="32" height="32" rx="8" fill="#FFBF00"/><path d="M6 25V19M11 25V9M16 25V14M21 25V6M26 25V17" stroke="#022851" stroke-width="2.6" stroke-linecap="round"/></svg>
+      <span>West Coast Metabolomics Center &middot; UC Davis</span></p>
+    <h1>Connect an agent</h1>
+    <p class="lede">The same cleaner this page uses is available as a <strong>Model Context Protocol</strong> server, so an agent &mdash; Claude, Cursor, Copilot, pi, or your own script &mdash; can clean your spectra and, unlike a REST call, tell you <em>why</em> each ion went away. Nothing is uploaded anywhere by the agent: the tools read the spectrum you hand them and return the answer.</p>
+    <ul class="chips" aria-label="Highlights">
+      <li>Streamable HTTP, no key needed</li>
+      <li>Every removal carries a reason</li>
+      <li>Same tables and verdicts as the web page</li>
+    </ul>
+  </div>
+</header>
+
+<main class="layout">
+  <section class="input" aria-label="Connecting">
+    <div class="card prose">
+      <h2 class="step"><span class="num" aria-hidden="true">1</span> Point your client at the endpoint</h2>
+      <p>The MCP endpoint is <strong>Streamable HTTP</strong> at</p>
+      <p class="endpoint"><span class="url">https://denoise.mcp.metabolomics.us/mcp</span></p>
+      <p>There is no key, token or login: the tools only report on a spectrum you send them, and the server holds nothing between calls (it is stateless, so a restart costs a client one retried request). If the address refuses to connect, the release is not deployed yet &mdash; step&nbsp;2 works regardless.</p>
+
+      <p>Most clients take the same shape &mdash; a name and a URL. In Claude Desktop, Claude Code (<code>.mcp.json</code>), Cursor or VS&nbsp;Code:</p>
+      <pre><code>{
+  "mcpServers": {
+    "denoise": {
+      "type": "http",
+      "url": "https://denoise.mcp.metabolomics.us/mcp"
+    }
+  }
+}</code></pre>
+      <p>In pi, from a shell:</p>
+      <pre><code>pi mcp add denoise --url https://denoise.mcp.metabolomics.us/mcp</code></pre>
+      <p>Then ask for what you would normally do by hand: <q>clean <span class="mono">spectrum.msp</span> and tell me what you removed and why</q>, or <q>is 100.5 a real ion in positive mode?</q> The agent picks the tool; you get the reasons back.</p>
+    </div>
+
+    <div class="card prose">
+      <h2 class="step"><span class="num" aria-hidden="true">2</span> Or run it beside your own data</h2>
+      <p>Same code, no network: the server speaks MCP over a pipe (<code>stdio</code>) and reads the tables from the repository checkout. The MCP SDK needs Python&nbsp;3.10 or newer, which is why this runs in its own environment instead of the one the REST service uses.</p>
+      <pre><code>git clone git@github.com:metabolomics-us/impossible-mass-denoise.git
+cd impossible-mass-denoise
+python3.12 -m venv .venv-mcp
+.venv-mcp/bin/pip install -r requirements.txt -r requirements-mcp.lock
+
+.venv-mcp/bin/python -m denoise_mcp --stdio</code></pre>
+      <p>Configure that as a stdio server instead of a URL:</p>
+      <pre><code>{
+  "mcpServers": {
+    "denoise": {
+      "command": "/path/to/impossible-mass-denoise/.venv-mcp/bin/python",
+      "args": ["-B", "-m", "denoise_mcp", "--stdio"]
+    }
+  }
+}</code></pre>
+      <p class="muted">Add <code>--expect-fingerprint &lt;hex&gt;</code> to refuse to start on chemistry tables other than the ones you checked, and <code>--host 127.0.0.1 --port 8301 --allowed-host &lt;name&gt;</code> to serve HTTP yourself (the allowlist is what stops a page on another domain from reaching a local port).</p>
+    </div>
+  </section>
+
+  <section class="outcol">
+    <div class="card prose">
+      <h2>What a call returns</h2>
+      <p>An agent reads an answer, not a stream of bytes, so the default answer is the part that fits and matters: counts first, then the removed ions with their reasons. The clean peak list is opt-in, because on a 5&nbsp;000-peak spectrum it is the biggest thing in the reply and the least interesting part.</p>
+      <pre><code>{
+  "summary": {
+    "mode": "pos", "halogens": false,
+    "labels": { "deuterium": 0, "carbon13": 0, "nitrogen15": 0 },
+    "precursor_mz": null,
+    "fingerprint": "5aae4ec26694da4d", "table_max_mz": 1700.0,
+    "total": 4, "kept": 2, "removed": 2,
+    "intensity_in": 165.0, "intensity_removed": 25.0,
+    "intensity_removed_fraction": 0.15151515151515152,
+    "removed_above_table": 0, "formulas_computed": 0, "formulas_skipped": 0
+  },
+  "removed": [
+    { "mz": 100.5, "intensity": 20.0,
+      "reasons": ["nearest-legal-below", "possible-as-doubly-charged"],
+      "narrative": "m/z 100.5000 (positive polarity); the closest allowed mass is
+                    100.1247, below this ion by 375.3 mDa; explainable as a doubly
+                    charged ion (z=2); the deployed model assumes z=1.",
+      "nearest_legal_mz": 100.12465194171052, "nearest_legal_mDa": -375.34805828947526 },
+    { "mz": 123.9, "intensity": 5.0,
+      "reasons": ["nearest-legal-below", "legal-within-10mDa", "needs-halogen-alphabet"],
+      "narrative": "m/z 123.9000 (positive polarity); the closest allowed mass is
+                    123.8945, below this ion by 5.5 mDa; an allowed mass exists within
+                    10 mDa, so this ion falls in a gap that makes the model discriminating
+                    rather than broken; it needs a halogen (Cl, F, Br or I) to be
+                    explainable, and this request did not allow the halogen alphabet.",
+      "nearest_legal_mz": 123.89449747463188, "nearest_legal_mDa": -5.502525368129341 }
+  ],
+  "kept": null,
+  "kept_omitted": "include_kept=true would add 2 peaks (~74 bytes as JSON)",
+  "kept_truncated": null,
+  "removed_truncated": null,
+  "answer_bytes": 1438,
+  "answer_oversized": null
+}</code></pre>
+      <p>That is the answer to the four peaks in the curl example below &mdash; copied, not written by hand. The fields that exist to keep an agent honest about what it is looking at:</p>
+      <ul>
+        <li><code>kept_omitted</code> names the option that adds the surviving peaks and says how big the answer would get, so a caller can ask only when it needs the list.</li>
+        <li><code>removed_truncated</code> is <code>null</code> unless the removals were cut to fit, in which case it says how many were returned, in what order, and how to read the rest. The counts in <code>summary</code> always cover the whole spectrum, and an answer is never quietly shortened.</li>
+        <li><code>kept_truncated</code> is the same promise for the peak list a caller asked for with <code>include_kept=true</code>: when the answer has to be fitted to <code>max_answer_bytes</code>, it says how many of the surviving peaks arrived.</li>
+        <li><code>answer_oversized</code> is the last resort, for an answer that cannot be fitted at all because the summary alone is too big. It is stated rather than left for a harness to cut.</li>
+        <li><code>answer_bytes</code> says how big this answer is as it goes out, against the <code>max_answer_bytes</code> budget &mdash; so a caller can see how much of its reading room one call took, and ask for less next time.</li>
+        <li><code>fingerprint</code> identifies the chemistry tables that made the verdict and <code>table_max_mz</code> the mass they were built up to.</li>
+      </ul>
+      <p>A <code>clean_batch</code> answer is the same idea at batch scale: a <code>summary</code> over every spectrum, then one <code>per_spectrum</code> summary each in the order sent. Removals are not repeated there &mdash; they arrive as progress lines while the batch runs &mdash; and the same <code>answer_bytes</code> and <code>answer_oversized</code> pair applies to the whole reply, because 200 summaries on their own already outrun the budget.</p>
+    </div>
+
+    <div class="card prose">
+      <h2>Tools</h2>
+      <div class="scroll">
+        <table class="spec">
+          <thead><tr><th scope="col">Tool</th><th scope="col">Use it for</th><th scope="col">Cost</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">clean_spectrum</td><td>One spectrum, up to 5&nbsp;000 peaks. Returns summary + removals.</td><td>Fast; explanations add a little work per removed ion.</td></tr>
+            <tr><td class="mono">clean_batch</td><td>Up to 200 spectra in one call. Stops on the first spectrum that breaks its limits and says which one.</td><td>Linear in spectra; <code>stream: true</code> keeps you informed while it runs.</td></tr>
+            <tr><td class="mono">explain_ion</td><td>One m/z: is it possible, why not, and how far to the nearest legal mass.</td><td>Cheap; <code>model_flags: true</code> (which validity model accepts it) is about 200&times; dearer.</td></tr>
+            <tr><td class="mono">service_info</td><td>Tables loaded, fingerprint, ceiling, every limit that will reject a request.</td><td>Read this before a large request.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Beyond the peaks, four options change the answer rather than the work: <code>halogens</code> (widen the alphabet to F/Cl/Br/I, which rejects fewer noise peaks), <code>precursor_mz</code> (keep the precursor whatever the filter makes of it), <code>deuterium</code> / <code>carbon13</code> / <code>nitrogen15</code> (declare a labelled standard&rsquo;s label count so its ions are kept), and <code>explanations: false</code> (verdicts without the why). Two more cost real work and are capped per call: <code>formulas</code> (a formula witness for kept peaks, about 500&times; a verdict) and <code>model_flags</code> (which validity model kept each peak, about 200&times;). <code>nearest_only</code> trades the reason list for just the distance.</p>
+    </div>
+
+    <div class="card prose">
+      <h2>Progress while it works</h2>
+      <p>Ask for <code>stream: true</code> and the server pushes notifications while the cleaning runs, so an agent sees lines arriving instead of one long silence: <q>KEPT 181.0707 100.0</q>, <q>REMOVED 100.5000 20.0 nearest-legal-below|possible-as-doubly-charged</q>, and <q>SPECTRUM index=41 total=200 kept=18 removed=3</q> as each spectrum in a batch finishes. <code>clean_batch</code> streams by default; <code>clean_spectrum</code> does not. By default every line is sent &mdash; pass <code>min_progress_interval_ms</code> to thin the per-peak lines on a big spectrum (a finished spectrum is always reported), and <code>explanations: false</code> in a batch leaves only the per-spectrum lines.</p>
+    </div>
+
+    <div class="card prose">
+      <h2>Why an ion was removed</h2>
+      <p>Every removal carries codes. This table is for humans; the authoritative machine-readable list is the <code>denoise://reason-codes</code> resource, which the client can read directly.</p>
+      <div class="scroll">
+        <table class="spec codes">
+          <thead><tr><th scope="col">Code</th><th scope="col">What it says about the ion</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">no-legal-ion-nearby</td><td>No CHNOPS (or halogen) formula comes anywhere near this mass &mdash; the strongest signal.</td></tr>
+            <tr><td class="mono">nearest-legal-below</td><td>The closest allowed mass is underneath this ion.</td></tr>
+            <tr><td class="mono">nearest-legal-above</td><td>The closest allowed mass is above this ion.</td></tr>
+            <tr><td class="mono">legal-within-5mDa</td><td>An allowed mass exists within 5 mDa, so the gap is narrow &mdash; treat the removal with care.</td></tr>
+            <tr><td class="mono">legal-within-10mDa</td><td>An allowed mass exists within 10 mDa.</td></tr>
+            <tr><td class="mono">legal-within-30mDa</td><td>An allowed mass exists within 30 mDa.</td></tr>
+            <tr><td class="mono">legal-within-100mDa</td><td>An allowed mass exists within 100 mDa.</td></tr>
+            <tr><td class="mono">legal-within-300mDa</td><td>An allowed mass exists within 300 mDa &mdash; the model is discriminating here, not broken.</td></tr>
+            <tr><td class="mono">possible-as-doubly-charged</td><td>It looks real if it carried two charges; the deployed model assumes one.</td></tr>
+            <tr><td class="mono">needs-halogen-alphabet</td><td>A fluorine, chlorine, bromine or iodine formula explains it; turn halogens on if that is plausible.</td></tr>
+            <tr><td class="mono">consistent-with-label-carbon13</td><td>It sits a whole number of <span class="mono">13C</span> labels above an allowed mass &mdash; a labelled standard or its M+1.</td></tr>
+            <tr><td class="mono">consistent-with-label-deuterium</td><td>The same, for deuterium labels.</td></tr>
+            <tr><td class="mono">consistent-with-label-nitrogen15</td><td>The same, for <span class="mono">15N</span> labels.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card prose">
+      <h2>Limits, and why they exist</h2>
+      <p>An agent&rsquo;s context window is the reason for the odd ones. Harnesses cut a long tool reply without saying so, and a cut-off peak list is worse than no list: so the answer is measured, fitted, and made to report what it gave up. Counting entries is not enough by itself &mdash; 250 removals that each carry a measured sentence measured 120 KB &mdash; which is why there is a byte limit as well as a count limit.</p>
+      <div class="scroll">
+        <table class="spec">
+          <thead><tr><th scope="col">Limit</th><th scope="col">Value</th><th scope="col">Why</th></tr></thead>
+          <tbody>
+            <tr><td>Peaks per spectrum</td><td class="mono">5000</td><td>Above this, use the web page or REST, which stream to a file.</td></tr>
+            <tr><td>Spectra per batch call</td><td class="mono">200</td><td>Keeps one call inside a client&rsquo;s patience.</td></tr>
+            <tr><td>Removed peaks listed</td><td class="mono">250</td><td>Beyond it the reply is cut to this many, and <code>removed_truncated</code> says so.</td></tr>
+            <tr><td>Answer size</td><td class="mono">20000 bytes</td><td>What an agent harness reads whole before cutting the rest in silence. A bigger answer is fitted to it &mdash; the sentences on tail removals first, then the opted-in peak list, then whole entries &mdash; and says which of those it gave up.</td></tr>
+            <tr><td>Formula lookups per request</td><td class="mono">200000</td><td>Bounded work per request, so one caller cannot hold the server.</td></tr>
+            <tr><td>Formula ions explained per call</td><td class="mono">50</td><td>Full formula hypotheses are the expensive part.</td></tr>
+            <tr><td>Model ions per call</td><td class="mono">50</td><td>The validity models cost about 200&times; a verdict.</td></tr>
+            <tr><td>Explanation work per call</td><td class="mono">1000000 &micro;s</td><td>Stops, with a clear message, instead of running unbounded.</td></tr>
+            <tr><td>Label count</td><td class="mono">12</td><td>Enough for any labelled standard people actually run.</td></tr>
+            <tr><td>Mass ceiling</td><td class="mono">1700 m/z</td><td>The tables stop there; above it every ion is reported possible.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="muted">Exact values come from <code>service_info</code>, which reports the limits the running server will enforce; this table is written for people.</p>
+    </div>
+
+    <div class="card prose">
+      <h2>By hand, without a client</h2>
+      <p>The transport is JSON-RPC 2.0 over HTTP POST. Two headers matter: <code>Accept</code> must name both <code>application/json</code> and <code>text/event-stream</code>, or the server answers 406; and every request needs an <code>id</code> to get an answer back (without one it is a notification and you get 202 with nothing).</p>
+      <pre><code>curl -sS https://denoise.mcp.metabolomics.us/mcp \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+        "name":"clean_spectrum",
+        "arguments":{"mode":"pos",
+                     "peaks":[[181.0707,100],[100.5,20],[123.9,5],[85.0284,40]]}}}'</code></pre>
+      <p>The reply arrives as one <code>event: message</code> SSE frame whose <code>data:</code> line holds the JSON-RPC answer &mdash; the summary above, with 181.0707 and 85.0284 kept and 100.5 and 123.9 removed. List the tools with <code>{"method":"tools/list","params":{}}</code> and the reason codes with <code>{"method":"resources/read","params":{"uri":"denoise://reason-codes"}}</code>.</p>
+      <details>
+        <summary>Trouble</summary>
+        <ul>
+          <li><strong>406</strong> &mdash; the <code>Accept</code> header is missing <code>text/event-stream</code>.</li>
+          <li><strong>421</strong> &mdash; the <code>Host</code> the server saw is not the name it was started for; a proxy must forward the public name.</li>
+          <li><strong>413 / 422</strong> &mdash; the body or the request broke a limit named in the message; fix the request, do not retry it.</li>
+          <li><strong>A tool answer with <code>isError</code></strong> &mdash; a limit or a bad argument, stated in plain words; this is an ordinary answer, not a protocol failure.</li>
+          <li><strong>Nothing on <code>/</code></strong> &mdash; the MCP host serves only <code>/mcp</code>; the web page and REST API are on <code>denoise.metabolomics.us</code>.</li>
+        </ul>
+      </details>
+    </div>
+  </section>
+</main>
+
+<section class="how" aria-label="How it works">
+  <div class="how-inner">
+    <h2>Same cleaner, two doors</h2>
+    <ol class="steps">
+      <li><strong>One implementation.</strong> The MCP tools call the same classifier the web page and the REST API call, so a verdict cannot differ by door.</li>
+      <li><strong>Proven equal.</strong> A release test sends the identical peaks down both doors and fails if any verdict differs, and checks that the reason codes the tools emit are the ones this page lists.</li>
+      <li><strong>Nothing invented.</strong> Explanations stop at the mass the tables were built to. Above <span class="mono">1700 m/z</span> the answer is &ldquo;possible&rdquo;, and the tool says so rather than guessing.</li>
+    </ol>
+    <details class="caveat">
+      <summary>What does &ldquo;impossible&rdquo; mean?</summary>
+      <p>Impossible means not explained by CHNOPS, singly charged, monoisotopic. Works for Orbitrap data; off by default for TTOF; not for QTOF. Ions above 1700 m/z are always reported possible.</p>
+    </details>
+    <p class="muted">Prefer plain HTTP? <a href="/docs">The REST API</a> takes the same spectra and returns the same verdicts, and <a href="/">this site&rsquo;s form</a> needs no setup at all.</p>
+  </div>
+</section>
+
+<footer class="site">
+  <p>Impossible-mass denoise &middot; West Coast Metabolomics Center, UC Davis</p>
+  <p><a href="/">Clean spectra</a> &middot; <a href="/docs">API docs</a> &middot; <a href="/openapi.json">OpenAPI JSON</a> &middot; <a href="/healthz">Status</a></p>
+</footer>
+</body>
+</html>

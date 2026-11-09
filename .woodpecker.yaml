@@ -48,6 +48,16 @@ steps:
       - 'echo "repo: ${CI_REPO} @ ${CI_COMMIT_SHA} (branch ${CI_COMMIT_BRANCH:-main})"'
       - 'bash ops/ci/test_service.sh'
 
+  # The MCP surface (denoise_mcp) gates separately: its own venv, its own interpreter (>= 3.10,
+  # the MCP SDK refuses 3.9), its own lock, and integration tests that start a real server over
+  # stdio and over HTTP. See ops/ci/test_mcp.sh for why it does not share the service venv.
+  - name: mcp-gate
+    image: bash
+    commands:
+      - 'set -eu'
+      - 'echo "repo: ${CI_REPO} @ ${CI_COMMIT_SHA} (branch ${CI_COMMIT_BRANCH:-main})"'
+      - 'bash ops/ci/test_mcp.sh'
+
   # Merging a PR is a push to main: both gates above must pass first, then the
   # head builds the release, rolls kvm-node-7 then kvm-node-8, verifies, and
   # restores the previous release on failure. See ops/ci/woodpecker-deploy.sh

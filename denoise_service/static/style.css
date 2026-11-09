@@ -173,6 +173,25 @@ tr.impossible td { color: var(--red-ink); font-weight: 600; background: var(--re
 footer.site { max-width: 82rem; margin: 0 auto; padding: 1.4rem 1.25rem 2.2rem; display: flex; flex-wrap: wrap; justify-content: space-between; gap: .5rem 1.5rem; color: var(--muted); font-size: .9rem; }
 footer.site p { margin: 0; }
 
+/* the agent page (mcp.html): prose, code, tables of facts. Same tokens, nothing fetched. */
+.prose { font-size: .95rem; }
+.prose h3 { margin-top: 1.1rem; }
+.prose p, .prose ul, .prose ol, .prose pre, .prose .scroll { margin: .6rem 0 0; }
+.prose ul, .prose ol { padding-left: 1.2rem; }
+.prose li + li { margin-top: .3rem; }
+.prose q { quotes: "\201C" "\201D"; }
+.endpoint { padding: .75rem 1rem; background: var(--accent-soft); border: 1px solid var(--line-strong); border-radius: 10px; }
+.endpoint .url { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 1rem; font-weight: 600; color: var(--brand-ink); word-break: break-all; }
+pre { padding: .8rem .9rem; overflow-x: auto; background: var(--surface-2);
+  border: 1px solid var(--line); border-radius: 10px; font-size: .85rem; line-height: 1.45; }
+code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+pre code { font: inherit; }
+:not(pre) > code { padding: .05em .35em; background: var(--surface-2); border: 1px solid var(--line); border-radius: 5px; }
+table.spec { width: 100%; border-collapse: collapse; }
+table.spec th { font-size: .85rem; }
+table.spec.codes td:first-child { white-space: nowrap; }
+
 @media (max-width: 480px) {
   .hero-inner { padding: 1.4rem 1rem 1.6rem; }
   .layout { padding: .8rem; gap: .8rem; }
