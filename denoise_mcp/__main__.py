@@ -12,12 +12,19 @@ import sys
 import threading
 from typing import List, Optional
 
-from .limits import Limits
+from .limits import LimitError, Limits
 
 LOG = logging.getLogger("denoise_mcp")
 
+# A fitted answer always keeps its summary, which measures about 1.4 KB on the wire with its counts,
+# ceiling, fingerprint and reason tallies. A budget under that does not squeeze an answer, it empties
+# one: every call would come back `answer_oversized`. So the flag has a floor and the process refuses
+# to start below it.
+MIN_ANSWER_BYTES = 2048
 
-def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
+
+def build_parser() -> argparse.ArgumentParser:
+    """The command line as one object, so a test can ask what an operator can actually set."""
     p = argparse.ArgumentParser(
         prog="denoise_mcp",
         description="MCP server for the impossible-mass metabolomics filter: clean spectra and "
@@ -47,14 +54,34 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
                    help="cap on formula witnesses per request (each costs ~7.9 ms)")
     p.add_argument("--max-model-ions", type=int, default=Limits().max_model_ions,
                    help="cap on validity-model flags per request (each costs ~3.9 ms)")
+    # The two answer-size limits are knobs because they are claims about the caller's environment,
+    # not about the chemistry: an agent that reads 32 KB per result wants a different budget than
+    # one that reads 8 KB. Both are reported by service_info, so both have to be settable here.
+    p.add_argument("--max-result-peaks", type=int, default=Limits().max_result_peaks,
+                   help="cap on removal entries in one answer (each costs ~476 bytes with its "
+                        "narrative); the summary counts the whole answer either way")
+    p.add_argument("--max-answer-bytes", type=int, default=Limits().max_answer_bytes,
+                   help="byte budget for one answer (default %d, the point past which agent "
+                        "harnesses truncate results in silence); what was given up to fit is written "
+                        "into the answer. Floor %d, one summary's worth."
+                        % (Limits().max_answer_bytes, MIN_ANSWER_BYTES))
     p.add_argument("--log-level", default="INFO")
-    return p.parse_args(argv)
+    return p
+
+
+def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
+    return build_parser().parse_args(argv)
 
 
 def limits_from(args: argparse.Namespace) -> Limits:
     default = Limits()
+    if args.max_answer_bytes < MIN_ANSWER_BYTES:
+        raise LimitError("max_answer_bytes must be at least %d bytes - that is what a bare summary "
+                         "costs, so a smaller budget would leave every answer with nothing in it"
+                         % MIN_ANSWER_BYTES)
     return Limits(max_peaks=args.max_peaks, max_batch=args.max_batch,
                   max_formula_ions=args.max_formula_ions, max_model_ions=args.max_model_ions,
+                  max_result_peaks=args.max_result_peaks, max_answer_bytes=args.max_answer_bytes,
                   max_label=default.max_label, max_label_lookups=default.max_label_lookups,
                   max_request_lookups=default.max_request_lookups,
                   max_explanation_work_us=default.max_explanation_work_us)
@@ -91,6 +118,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("denoise_mcp: choose a transport - --stdio, or --host with --port", file=sys.stderr)
         return 2
 
+    # Settled before the tables load: an impossible budget needs no chemistry to notice, and a
+    # process that is going to refuse should refuse in a second rather than after a slow start.
+    try:
+        limits = limits_from(args)
+    except LimitError as exc:
+        print("denoise_mcp: %s" % exc, file=sys.stderr)
+        return 2
+
     # Load the tables and check the chemistry before a single request is answered.
     import denoise
     from . import explain
@@ -108,7 +143,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.cache_clear_seconds > 0:
         _clear_cache_periodically(args.cache_clear_seconds)
 
-    server = build_server(limits=limits_from(args))
+    server = build_server(limits=limits)
     if args.stdio:
         LOG.info("serving over stdio")
         server.run("stdio")

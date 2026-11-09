@@ -169,6 +169,15 @@ journalctl -u denoise-mcp -n 20            # expect: "tables loaded: ... fingerp
 curl -s http://127.0.0.1:8301/mcp -o /dev/null -w '%{http_code}\n'    # 421 or 406: alive, refusing a bad Host
 ```
 
+Every limit `service_info` reports is a flag on the server (`--max-peaks`, `--max-batch`,
+`--max-formula-ions`, `--max-model-ions`, `--max-result-peaks`, `--max-answer-bytes`), so tuning one
+is an `ExecStart` edit and a restart, not a code change. `--max-answer-bytes` refuses values under
+2048, which is what a bare summary costs on the wire: a smaller budget does not squeeze an answer, it
+empties one, and the process says so at startup instead of serving `answer_oversized` to everyone. The
+four work-budget limits (`max_label`, `max_label_lookups`, `max_request_lookups`,
+`max_explanation_work_us`) are deliberately not flags: they bound the CPU one request may buy, and a
+deployment that raises a size limit should not raise that by accident.
+
 Smoke it the way a client does, with the JSON-RPC expectation in `ops/deploy/smoke.json` (`mcp`
 block):
 
