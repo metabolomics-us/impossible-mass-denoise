@@ -15,6 +15,7 @@ worse than a summary that tells you how to ask for the rest.
 """
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 from typing import Annotated, Any, Dict, List, Literal, Optional, Tuple
@@ -71,6 +72,9 @@ class Summary(BaseModel):
 class SpectrumResult(Summary):
     kept_peaks: Optional[List["KeptPeak"]] = Field(
         description="Only with include_kept=true; otherwise null.", default=None)
+    kept_truncated: Optional[str] = Field(
+        description="Set when this spectrum's kept peaks were left out of the answer; says how many "
+                    "and why.", default=None)
 
 
 class RemovedPeak(BaseModel):
@@ -102,9 +106,19 @@ class CleanResult(BaseModel):
                                                     "spectrum.")
     kept: Optional[List[KeptPeak]] = None
     kept_omitted: Optional[str] = None
+    kept_truncated: Optional[str] = Field(
+        description="Set when include_kept=true and the peak list had to be shortened to fit "
+                    "max_answer_bytes.", default=None)
     removed_truncated: Optional[str] = Field(
         description="Set when removals were left out of this answer; says how many and how to get "
                     "the rest.", default=None)
+    answer_bytes: int = Field(
+        description="Size of this answer as JSON, measured with this field at 0. A reply bigger "
+                    "than max_answer_bytes is fitted to it, and what was given up is written into "
+                    "removed_truncated, kept_truncated or answer_oversized.", default=0)
+    answer_oversized: Optional[str] = Field(
+        description="Set when the answer could not be fitted inside max_answer_bytes at all; the "
+                    "summary is the part that cannot be shortened.", default=None)
 
 
 class SpectrumSpec(BaseModel):
@@ -135,6 +149,12 @@ class BatchResult(BaseModel):
     per_spectrum: List[SpectrumResult] = Field(
         description="One summary per input spectrum, in order. Removals stream as progress lines "
                     "instead of being repeated here.")
+    answer_bytes: int = Field(
+        description="Size of the summary and per_spectrum lists as JSON, measured with this field "
+                    "at 0; the fit reserves room for the number itself.", default=0)
+    answer_oversized: Optional[str] = Field(
+        description="Set when the answer is bigger than max_answer_bytes, the size an agent harness "
+                    "reads before cutting the rest; says how many spectra fit whole.", default=None)
 
 
 class IonExplanation(BaseModel):
@@ -169,13 +189,26 @@ READ_ONLY = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotent
                             openWorldHint=False)
 
 
+def _clean_answer_bytes(answer: Dict[str, Any]) -> int:
+    """Bytes this answer costs on the wire, optional fields and all.
+
+    `clean.payload` fits an answer to a byte budget, and the fitting has to measure what the
+    transport actually sends: this model, not the dict it was built from. Two optional fields
+    serialized as null are around 40 bytes the dict does not contain, enough to put an answer that
+    measured as fitting past the budget. Compact, because that is how JSON-RPC goes out.
+    """
+    return len(json.dumps(CleanResult(**answer).model_dump(mode="json"),
+                          separators=(",", ":")))
+
+
 def _limits_dict(lim: Limits) -> Dict[str, int]:
     return {"max_peaks": lim.max_peaks, "max_batch": lim.max_batch, "max_label": lim.max_label,
             "max_label_lookups": lim.max_label_lookups,
             "max_request_lookups": lim.max_request_lookups,
             "max_formula_ions": lim.max_formula_ions, "max_model_ions": lim.max_model_ions,
             "max_explanation_work_us": lim.max_explanation_work_us,
-            "max_result_peaks": lim.max_result_peaks}
+            "max_result_peaks": lim.max_result_peaks,
+            "max_answer_bytes": lim.max_answer_bytes}
 
 
 async def _in_thread(work, *args):
@@ -257,7 +290,9 @@ def build_server(limits: Optional[Limits] = None, name: str = "impossible-mass-d
         except LimitError as exc:
             raise ToolError(str(exc)) from None
         return CleanResult(**clean.payload(res, include_kept=include_kept,
-                                          max_removed=lim.max_result_peaks))
+                                           max_removed=lim.max_result_peaks,
+                                           max_bytes=lim.max_answer_bytes,
+                                           measure=_clean_answer_bytes))
 
     @server.tool(
         name="clean_batch",
@@ -334,20 +369,47 @@ def build_server(limits: Optional[Limits] = None, name: str = "impossible-mass-d
         for res in res_list:
             data = clean.summary(res)
             if include_kept:
-                data["kept_peaks"] = [{"mz": p.mz, "intensity": p.intensity, "formula": p.formula,
-                                       "model": p.model} for p in res.kept]
+                peaks = [{"mz": p.mz, "intensity": p.intensity, "formula": p.formula,
+                          "model": p.model} for p in res.kept]
+                # A batch asks for the peaks of every spectrum at once, so the per-spectrum list is
+                # capped as well; without this, 200 spectra is tens of megabytes.
+                if len(peaks) > lim.max_result_peaks:
+                    data["kept_truncated"] = (
+                        "%d of %d kept peaks returned (the first %d, in acquisition order; "
+                        "max_result_peaks=%d per spectrum); the summary counts cover the whole "
+                        "spectrum." % (lim.max_result_peaks, len(peaks), lim.max_result_peaks,
+                                       lim.max_result_peaks))
+                    peaks = peaks[:lim.max_result_peaks]
+                data["kept_peaks"] = peaks
             per_spectrum.append(SpectrumResult(**data))
         intensity_in = sum(r.intensity_in for r in res_list)
         intensity_out = sum(r.intensity_removed for r in res_list)
-        return BatchResult(
-            summary=BatchSummary(spectra=len(res_list),
-                                 total=sum(r.peaks_in for r in res_list),
-                                 kept=done["kept"], removed=done["removed"],
-                                 intensity_removed_fraction=(intensity_out / intensity_in)
-                                 if intensity_in > 0 else 0.0,
-                                 fingerprint=res_list[0].fingerprint,
-                                 table_max_mz=res_list[0].table_max_mz),
-            per_spectrum=per_spectrum)
+        batch_summary = BatchSummary(spectra=len(res_list),
+                                     total=sum(r.peaks_in for r in res_list),
+                                     kept=done["kept"], removed=done["removed"],
+                                     intensity_removed_fraction=(intensity_out / intensity_in)
+                                     if intensity_in > 0 else 0.0,
+                                     fingerprint=res_list[0].fingerprint,
+                                     table_max_mz=res_list[0].table_max_mz)
+        # A batch is the one answer whose size the caller cannot shape per spectrum: 200 summaries
+        # alone is around 80 KB, which an agent harness cuts without saying so. Nothing here can be
+        # dropped without losing the point of the call, so measure it and say what would fit whole.
+        # Measured as the model that goes out, so the null fields are counted too.
+        measured = len(json.dumps(
+            BatchResult(summary=batch_summary, per_spectrum=per_spectrum,
+                        answer_bytes=0, answer_oversized=None).model_dump(mode="json"),
+            separators=(",", ":")))
+        note = None
+        if measured > lim.max_answer_bytes:
+            each = measured / max(1, len(per_spectrum))
+            note = ("this answer is %d bytes, past max_answer_bytes=%d, which is how much an agent "
+                    "harness reads before cutting the rest without saying so; spectra like these "
+                    "cost about %.0f bytes each, so about %d fit whole in one answer - call with "
+                    "fewer at a time to read all of it"
+                    % (measured, lim.max_answer_bytes, each,
+                       max(1, int(lim.max_answer_bytes // each))))
+        return BatchResult(summary=batch_summary, per_spectrum=per_spectrum,
+                           answer_bytes=measured, answer_oversized=note)
 
     @server.tool(
         name="explain_ion",

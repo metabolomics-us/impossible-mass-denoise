@@ -39,6 +39,11 @@ class Limits:
     # harnesses truncate results over ~20 KB without saying so. The summary always states the true
     # counts; this caps how many removals come back, and the result says when it did.
     max_result_peaks: int = 250
+    # Capping the count is not enough on its own: 250 entries each carrying a measured sentence
+    # measured 120 KB, which is truncated silently by the same harnesses. So the answer is also
+    # fitted to a byte budget, dropping the least useful thing first (the sentence on tail entries,
+    # then the opt-in peak list, then entries) and recording every drop in the answer.
+    max_answer_bytes: int = 20000
 
     def peaks(self, peaks: Any) -> List[Tuple[float, float]]:
         """Validate shape, then return the peaks as float pairs.

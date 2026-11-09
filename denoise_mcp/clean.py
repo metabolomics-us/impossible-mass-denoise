@@ -218,13 +218,23 @@ def summary(res: Result) -> Dict[str, Any]:
 
 
 def payload(res: Result, include_kept: bool = False,
-            max_removed: Optional[int] = None) -> Dict[str, Any]:
+            max_removed: Optional[int] = None,
+            max_bytes: Optional[int] = None,
+            measure=None) -> Dict[str, Any]:
     """What to hand back as structured content: summary, removals, and kept peaks only if asked.
 
     `max_removed` caps how many removals are returned, because a spectrum that is mostly noise
     would otherwise come back as hundreds of kilobytes and be truncated by the caller before it is
     read. The cap never touches `summary`, so the counts stay the truth, and the result carries
     `removed_truncated` saying what was left out.
+
+    `max_bytes` additionally fits the whole answer to a byte budget, because capping the count is
+    not enough: entries that each carry a measured sentence reach 120 KB at 250 of them. See
+    `_fit_answer` for what gets dropped, in what order; every drop is written into the answer.
+
+    `measure` says how to count the bytes of a candidate answer. The host passes one that measures
+    what actually goes on the wire, optional fields included, because a schema that adds two null
+    fields makes an answer bigger than the dict that was measured. Default: this dict as JSON.
     """
     out: Dict[str, Any] = {"summary": summary(res)}
     out["removed"] = [{"mz": r.mz, "intensity": r.intensity, "reasons": list(r.reasons),
@@ -245,7 +255,120 @@ def payload(res: Result, include_kept: bool = False,
         out["kept_omitted"] = ("include_kept=true would add %d peak%s (~%d bytes as JSON)"
                                % (len(res.kept), "" if len(res.kept) == 1 else "s",
                                   _json_size(res.kept)))
+    if max_bytes is not None:
+        _fit_answer(out, max_bytes, measure)
     return out
+
+
+def _fit_answer(out: Dict[str, Any], max_bytes: int, measure=None) -> None:
+    """Shrink an answer in place until its JSON fits `max_bytes`, least useful thing first.
+
+    Three things can be given up, in this order: the sentence on the tail removals (their reason
+    codes and their distance to the nearest legal mass stay), then the peak list the caller opted
+    into, then whole removal entries. The summary is never touched, because it is the one part a
+    reader cannot reconstruct from anything else.
+
+    Every cut is written into the answer, and those notes are themselves bytes, so the counts are
+    searched, applied, and re-searched until the answer - notes included - fits or nothing is left
+    to give up; the latter is reported as `answer_oversized` rather than left for the caller's
+    harness to truncate in silence. `removed_truncated` (the entry cap's own note) is kept, and the
+    byte-fitting notes are appended to it. `answer_bytes` carries the size measured here, which is
+    why the budget searched against reserves room for the number itself.
+    """
+    import json
+
+    def size() -> int:
+        # Compact, because that is how a JSON-RPC message goes out; a pretty-printed count would
+        # leave room for the spaces the wire does not carry.
+        return (measure(out) if measure is not None
+                else len(json.dumps(out, separators=(",", ":"))))
+
+    # The size is reported in the answer it measures, so start at 0 and hold back the width the
+    # real number will need: what goes out is then inside max_bytes, not outside it by a few digits.
+    out["answer_bytes"] = 0
+    budget = max(1, max_bytes - len(str(max_bytes)) - 1)
+
+    if size() <= budget:
+        out["answer_bytes"] = size()
+        return
+
+    removals = out["removed"]                      # the pristine entries, sentences included
+    peaks = out.get("kept")                        # None unless the caller opted in
+    entry_cap_note = out["removed_truncated"]      # the max_result_peaks note, if any
+    total_removed = len(removals)
+    total_peaks = len(peaks) if peaks is not None else 0
+
+    def render(sentences: int, kept_removed: int, kept_peaks: int) -> None:
+        """Rebuild the answer from the pristine lists with three counts applied."""
+        carry = min(sentences, kept_removed)
+        out["removed"] = [dict(r, narrative=(r["narrative"] if i < carry else ""))
+                          for i, r in enumerate(removals[:kept_removed])]
+        if peaks is not None:
+            out["kept"] = peaks[:kept_peaks]
+            if kept_peaks < total_peaks:
+                out["kept_truncated"] = (
+                    "%d of %d kept peaks returned (the first %d, in acquisition order) because the "
+                    "answer is fitted to max_answer_bytes=%d; %s left out. The summary counts the "
+                    "whole spectrum, and asking for fewer spectra brings more of each."
+                    % (kept_peaks, total_peaks, kept_peaks, max_bytes,
+                       "1 was" if total_peaks - kept_peaks == 1
+                       else "%d were" % (total_peaks - kept_peaks)))
+            else:
+                out.pop("kept_truncated", None)
+        notes: List[str] = []
+        if carry < kept_removed:
+            dropped = kept_removed - carry
+            notes.append("fitted to max_answer_bytes=%d: %d of the %d entr%s %s without its "
+                         "narrative, so %d kept theirs; the reason codes and the distance to the "
+                         "nearest legal mass are there for all of them"
+                         % (max_bytes, dropped, kept_removed,
+                            "y" if dropped == 1 else "ies",
+                            "was" if dropped == 1 else "were", carry))
+        if kept_removed < total_removed:
+            notes.append("only the first %d of %d removals fitted inside max_answer_bytes=%d"
+                         % (kept_removed, total_removed, max_bytes))
+        joined = "; ".join(notes) + ("." if notes else "")
+        if entry_cap_note or joined:
+            out["removed_truncated"] = ((entry_cap_note + " " + joined).strip()
+                                        if entry_cap_note else joined)
+
+    def largest(total: int, chosen) -> int:
+        """Biggest count `chosen` accepts while the answer still fits; fewer never means bigger."""
+        lo, hi = 0, total
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            render(*chosen(mid))
+            if size() <= budget:
+                lo = mid
+            else:
+                hi = mid - 1
+        return lo
+
+    counts = (total_removed, total_removed, total_peaks)     # nothing given up yet
+    seen = None
+    for _ in range(6):
+        # 1. prose, keeping as many sentences as fit while both lists are still whole.
+        sentences = largest(total_removed, lambda n: (n, counts[1], counts[2]))
+        # 2. entries. When the caller asked for the kept list too, one count trims both lists, so
+        #    neither starves the other: the answer carries the first k of each.
+        k = largest(max(total_removed, total_peaks),
+                    lambda n: (sentences, min(n, total_removed), min(n, total_peaks)))
+        counts = (sentences, min(k, total_removed), min(k, total_peaks))
+        render(*counts)
+        if size() <= budget:
+            out.pop("answer_oversized", None)
+            out["answer_bytes"] = size()
+            return
+        if counts == seen:                                   # the notes stopped shrinking
+            break
+        seen = counts
+
+    # Nothing was left to give up: say so, rather than let the caller's harness cut it quietly.
+    out["answer_oversized"] = (
+        "this answer is %d bytes against max_answer_bytes=%d and could not be fitted any smaller; "
+        "the summary and its %d removal %s are the floor"
+        % (size(), max_bytes, counts[1], "entry" if counts[1] == 1 else "entries"))
+    out["answer_bytes"] = size()
 
 
 def _json_size(kept: List[Peak]) -> int:

@@ -80,14 +80,35 @@ def test_every_limit_violation_is_a_named_error():
 def test_nginx_vhost_publishes_the_mcp_host_name():
     text = read("ops/deploy/nginx-denoise-mcp.conf")
     assert "server_name denoise.mcp.metabolomics.us;" in text
-    assert "proxy_pass http://127.0.0.1:8301;" in text
+    # The proxy target is an `upstream` block rather than a literal address in the location, so
+    # follow the name: the vhost has to reach the port the systemd unit listens on.
+    assert "proxy_pass http://denoise_mcp_backend;" in text
+    upstream = re.search(r"upstream denoise_mcp_backend \{(.*?)\}", text, re.S).group(1)
+    assert "server 127.0.0.1:8301" in upstream, "the unit binds 8301; the vhost proxies elsewhere"
+    assert "keepalive" in upstream
     # Streaming: a proxy_read_timeout shorter than the longest clean kills the connection mid-job.
     timeout = int(re.search(r"proxy_read_timeout\s+(\d+)s", text).group(1))
     assert timeout >= 120, "proxy_read_timeout is %ds" % timeout
     body = int(re.search(r"client_max_body_size\s+(\d+)([mk])", text).group(1))
     assert body >= 2
-    assert "X-Forwarded-For $remote_addr" in text, "the limiter key must be the real client"
+    assert re.search(r"X-Forwarded-For\s+\$remote_addr", text), \
+        "the limiter key must be the real client"
     assert not re.search(r"proxy_buffering\s+on", text)
+
+
+def test_only_the_mcp_path_reaches_the_mcp_server_on_that_host():
+    """The endpoint host serves one path; anything else must be answered here, not proxied."""
+    text = read("ops/deploy/nginx-denoise-mcp.conf")
+    https = text.split("listen 443")[-1]          # past both the IPv4 and the IPv6 listen lines
+    locations = re.findall(r"location\s+(.+?)\s*\{", https)
+    assert locations[0] == "= /mcp", "the exact-match /mcp location must be the one that proxies"
+    assert locations[-1] == "/", "the catch-all must come last"
+    mcp_block = re.search(r"location = /mcp \{(.*?)\n    \}", https, re.S).group(1)
+    assert "proxy_pass" in mcp_block and "limit_req" in mcp_block
+    catch_all = https.split("location / {")[1]
+    assert "proxy_pass" not in catch_all, "every path must not reach a server that knows only /mcp"
+    assert "return 404" in catch_all and "https://denoise.metabolomics.us/mcp" in catch_all, \
+        "the refusal has to point at the guide"
 
 
 def test_systemd_unit_runs_the_mcp_server_as_the_service_user():

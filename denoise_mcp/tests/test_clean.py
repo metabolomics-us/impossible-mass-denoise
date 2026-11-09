@@ -165,6 +165,80 @@ def test_the_payload_without_kept_peaks_is_smaller_than_the_payload_with_them():
             < len(json.dumps(clean.payload(res, include_kept=True))))
 
 
+# ------------------------------------------------------- the answer an agent can actually read
+
+# Mostly noise: enough removals that the entry list alone is far bigger than any agent harness
+# reads, and enough kept peaks that the opt-in list is too. Measured, not guessed: the spectrum
+# below removes 2883 of 5000 peaks.
+NOISY, NEG = [(200.0 + i * 0.0137, 5.0) for i in range(5000)], "neg"
+
+
+def _bytes(answer):
+    """Size as the server would measure it: compact JSON, the way JSON-RPC goes out."""
+    return len(json.dumps(answer, separators=(",", ":")))
+
+
+def _answer(res, **kw):
+    kw.setdefault("max_removed", Limits().max_result_peaks)
+    kw.setdefault("max_bytes", Limits().max_answer_bytes)
+    return clean.payload(res, **kw)
+
+
+def test_an_answer_fits_the_budget_an_agent_reads_without_losing_the_counts():
+    res = clean.clean_spectrum(NOISY, NEG)
+    answer = _answer(res)
+    assert _bytes(answer) <= Limits().max_answer_bytes, _bytes(answer)
+    # The counts stay the whole truth however the entries are cut.
+    assert answer["summary"]["total"] == 5000
+    assert answer["summary"]["removed"] == len(res.removed) > len(answer["removed"]) > 0
+    assert answer["removed_truncated"], "an answer that was cut has to say it was"
+    assert "max_answer_bytes" in answer["removed_truncated"]
+
+
+def test_the_budget_drops_a_sentence_before_it_drops_an_ion():
+    """The why is the reason codes plus a distance before it is the sentence: cut the sentence."""
+    res = clean.clean_spectrum(NOISY, NEG)
+    answer = _answer(res)
+    sentences = [bool(r["narrative"]) for r in answer["removed"]]
+    assert not all(sentences), "nothing was cut, so this proves nothing"
+    assert sentences[:sum(sentences)] == [True] * sum(sentences), "narratives were cut from the middle"
+    for r in answer["removed"]:
+        assert r["reasons"], "an entry without reasons is not an explanation"
+        assert r["nearest_legal_mz"] is not None
+    assert "narrative" in answer["removed_truncated"].lower()
+    # Asked for less chemistry, the same spectrum's answer needs no such cutting of codes.
+    brief = _answer(clean.clean_spectrum(NOISY, NEG, nearest_only=True))
+    assert _bytes(brief) <= Limits().max_answer_bytes
+
+
+def test_an_opt_in_peak_list_is_cut_to_the_budget_and_says_which_part_arrived():
+    res = clean.clean_spectrum(NOISY, NEG)
+    answer = _answer(res, include_kept=True)
+    assert _bytes(answer) <= Limits().max_answer_bytes, _bytes(answer)
+    assert len(answer["kept"]) < len(res.kept)
+    assert answer["kept"] == [{"mz": p.mz, "intensity": p.intensity, "formula": p.formula,
+                               "model": p.model} for p in res.kept[:len(answer["kept"])]]
+    assert answer["kept_truncated"] and "kept_omitted" not in answer
+    assert answer["summary"]["kept"] == len(res.kept)
+    # One budget, two lists the caller asked for: neither is allowed to starve the other.
+    assert answer["removed"] and answer["kept"], (len(answer["removed"]), len(answer["kept"]))
+
+
+def test_the_budget_never_touches_the_summary():
+    res = clean.clean_spectrum(NOISY, NEG)
+    assert _answer(res)["summary"] == clean.payload(res)["summary"]
+
+
+def test_a_request_without_a_budget_still_gets_the_whole_answer():
+    """`max_bytes=None` is what the pure layer did before a budget existed, and unit tests read it."""
+    res = clean.clean_spectrum(NOISY, NEG)
+    whole = clean.payload(res, include_kept=True, max_removed=None, max_bytes=None)
+    assert len(whole["removed"]) == len(res.removed)
+    assert len(whole["kept"]) == len(res.kept)
+    assert whole["removed_truncated"] is None and "kept_truncated" not in whole
+    assert _bytes(whole) > Limits().max_answer_bytes, "the budget would not have been needed"
+
+
 def test_too_many_peaks_is_refused_with_the_number_that_broke():
     with pytest.raises(LimitError, match="too many peaks \\(3\\); maximum 2"):
         clean.clean_spectrum(PEAKS[:3], POS, limits=Limits(max_peaks=2))

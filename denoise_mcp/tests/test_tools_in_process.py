@@ -10,13 +10,16 @@ measures coverage of `server.py`.
 """
 from __future__ import annotations
 
+import json
 import math
+import pathlib
+import re
 
 import pytest
 
 from denoise_mcp import explain, gen_codebook
 from denoise_mcp.limits import Limits
-from denoise_mcp.server import build_server, security_for
+from denoise_mcp.server import BatchResult, CleanResult, build_server, security_for
 from denoise_mcp.tests.in_process import as_json, error_text, in_process
 
 PEAKS = [[181.0707, 100.0], [100.5, 20.0], [123.9, 5.0], [85.0284, 40.0]]
@@ -385,6 +388,109 @@ async def test_service_info_reports_the_limits_this_server_was_built_with():
     async with in_process(limits=Limits(max_peaks=123)) as s:
         info = as_json(await s.call_tool("service_info", {}))
     assert info["limits"]["max_peaks"] == 123
+
+
+async def test_service_info_publishes_the_answer_size_it_keeps_to():
+    async with in_process() as s:
+        info = as_json(await s.call_tool("service_info", {}))
+    assert info["limits"]["max_answer_bytes"] == Limits().max_answer_bytes == 20000
+
+
+# ---------------------------------------------------------------- the size an agent can read
+
+# Mostly noise: 2883 of these 5000 peaks are removed, which at ~700 bytes an entry would be 120 KB.
+NOISY = [[200.0 + i * 0.0137, 5.0] for i in range(5000)]
+
+
+def wire_bytes(answer):
+    """Size of an answer as a JSON-RPC message carries it: no spaces between the parts."""
+    return len(json.dumps(answer, separators=(",", ":")))
+
+
+async def test_a_spectrum_that_is_mostly_noise_still_fits_what_an_agent_reads():
+    async with in_process() as s:
+        answer = as_json(await s.call_tool("clean_spectrum", {"peaks": NOISY, "mode": "neg"}))
+    assert wire_bytes(answer) <= Limits().max_answer_bytes, wire_bytes(answer)
+    # ...and it is small because it said what it left out, not because the counts were shrunk.
+    assert answer["summary"]["total"] == 5000
+    assert answer["summary"]["removed"] > len(answer["removed"]) > 0
+    assert "max_answer_bytes" in answer["removed_truncated"]
+    assert answer["answer_oversized"] is None
+
+
+async def test_peaks_opted_into_a_single_answer_are_cut_to_the_same_size():
+    async with in_process() as s:
+        answer = as_json(await s.call_tool("clean_spectrum",
+                                {"peaks": NOISY, "mode": "neg", "include_kept": True}))
+    assert wire_bytes(answer) <= Limits().max_answer_bytes, wire_bytes(answer)
+    assert answer["kept"] and len(answer["kept"]) < answer["summary"]["kept"]
+    assert "max_answer_bytes" in answer["kept_truncated"]
+    assert answer["kept_omitted"] is None, "the peak list was asked for, so it is not offered back"
+    assert answer["removed"], "the removals must not be squeezed out by the peak list"
+
+
+async def test_a_batch_asking_for_every_peak_list_is_capped_per_spectrum():
+    async with in_process() as s:
+        answer = as_json(await s.call_tool(
+            "clean_batch",
+            {"spectra": [{"peaks": NOISY[:4000], "mode": "neg"},
+                          {"peaks": NOISY[:4000], "mode": "neg"}],
+             "include_kept": True, "explanations": False}))
+    for one in answer["per_spectrum"]:
+        assert len(one["kept_peaks"]) <= Limits().max_result_peaks
+        assert one["kept_truncated"] and one["kept_peaks"]
+        assert one["kept"] > len(one["kept_peaks"]), "the summary must still count the whole spectrum"
+
+
+async def test_a_batch_too_big_for_one_answer_says_how_many_spectra_fit():
+    """Summaries cannot be shortened without losing the point of the call, so this is a warning."""
+    small = [[200.0 + i * 0.0137, 5.0] for i in range(20)]
+    async with in_process() as s:
+        answer = as_json(await s.call_tool(
+            "clean_batch", {"spectra": [{"peaks": small, "mode": "neg"}] * 100,
+                            "explanations": False}))
+    assert answer["answer_bytes"] > Limits().max_answer_bytes, answer["answer_bytes"]
+    assert answer["answer_oversized"], "a batch past the read size has to say so"
+    assert str(Limits().max_answer_bytes) in answer["answer_oversized"]
+    assert answer["summary"]["spectra"] == len(answer["per_spectrum"]) == 100
+
+
+async def test_a_batch_that_fits_says_nothing_about_being_too_big():
+    small = [[200.0 + i * 0.0137, 5.0] for i in range(20)]
+    async with in_process() as s:
+        answer = as_json(await s.call_tool(
+            "clean_batch", {"spectra": [{"peaks": small, "mode": "neg"}] * 3,
+                            "explanations": False}))
+    # answer_bytes measures the answer with that field at 0 and carrying no note, so the difference
+    # between it and the bytes that go out is exactly the width of the number itself.
+    assert wire_bytes(answer) - answer["answer_bytes"] == len(str(answer["answer_bytes"])) - 1
+    assert answer["answer_oversized"] is None
+
+
+def guide_page():
+    """The connect-an-agent guide, served by the REST service at /mcp."""
+    return (pathlib.Path(__file__).resolve().parents[2]
+            / "denoise_service" / "static" / "mcp.html").read_text()
+
+
+def test_the_guide_page_shows_every_field_the_answer_carries():
+    """`denoise_service/static/mcp.html` copies a real answer; a field the model gains must appear."""
+    page = guide_page()
+    for model in (CleanResult, BatchResult):
+        for name in model.model_fields:
+            assert ('"%s"' % name in page or "<code>%s</code>" % name in page), \
+                "%s is in the schema but not on the guide page" % name
+
+
+async def test_the_guide_page_answers_with_the_size_the_tool_reports():
+    """The answer printed on the guide is measured here, so a changed narrative re-copies the page."""
+    page = guide_page()
+    shown = int(re.search(r'"answer_bytes": (\d+)', page).group(1))
+    async with in_process() as s:
+        answer = as_json(await s.call_tool("clean_spectrum", {"peaks": PEAKS, "mode": "pos"}))
+    assert answer["answer_bytes"] == shown, (
+        "the tool answers at %d bytes; the guide page prints %d, so re-copy the answer"
+        % (answer["answer_bytes"], shown))
 
 
 # ---------------------------------------------------------------- hosting helpers

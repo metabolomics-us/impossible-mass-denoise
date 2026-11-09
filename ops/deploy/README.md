@@ -56,6 +56,10 @@ shared bucket for everyone.
 `location /` also publishes `/docs` and `/openapi.json`. That is intended: they are the public
 API documentation and expose nothing the API does not already offer.
 
+It also publishes `/mcp`, the *connect an agent* guide (`denoise_service/static/mcp.html`, served by
+the app itself, static HTML with no script of its own). No vhost change is needed for it, and it is
+not the MCP endpoint: that is a different name, `denoise.mcp.metabolomics.us`, below.
+
 ## 2. DNS and TLS
 
 Operator-owned. Create the DNS record for `denoise.metabolomics.us` pointing at whiteale's public
@@ -140,6 +144,12 @@ Two files in this repository describe it: `ops/deploy/nginx-denoise-mcp.conf` (v
 `ops/deploy/denoise-mcp.service` (unit). The vhost differs from the REST one on purpose: an MCP call
 is a long streamed response, so it needs `proxy_buffering off` and a long `proxy_read_timeout`, or
 progress notifications arrive bundled at the end and long cleans 504.
+
+The vhost serves `/mcp` and nothing else: every other path gets a 404 that names
+https://denoise.metabolomics.us/mcp, where the guide people and agents read lives (on the REST host,
+see section 1). A browser opened on the endpoint address therefore lands on instructions instead of a
+protocol error. Keep this repository's copy of the vhost and the nginx role's copy identical — that
+role owns `conf.d` and rewrites the file.
 
 It gets its own venv, because the MCP SDK needs Python >= 3.10 while the REST service runs on the
 nodes' system Python 3.9:

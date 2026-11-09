@@ -415,11 +415,19 @@ def create_app(config: Config) -> FastAPI:
     async def index() -> Response:
         return FileResponse(static_dir / "index.html", media_type="text/html")
 
+    # The guide for agents. Deliberately on this host and not on the MCP host: the MCP host
+    # serves only /mcp, so a person (or an agent) who lands here by typing the site address
+    # still finds out how to connect. GET only -- POSTing here is a mistake worth a 405 with an
+    # Allow header, not an HTML page served to a machine expecting JSON-RPC.
+    @app.get("/mcp", include_in_schema=False)
+    async def mcp_guide() -> Response:
+        return FileResponse(static_dir / "mcp.html", media_type="text/html")
+
     @app.middleware("http")
     async def page_headers(request: Request, call_next) -> Response:
         response = await call_next(request)
         path = request.url.path
-        if path == "/" or path == "/static" or path.startswith("/static/"):
+        if path in ("/", "/mcp") or path == "/static" or path.startswith("/static/"):
             response.headers["Cache-Control"] = "no-cache"
             response.headers["Content-Security-Policy"] = PAGE_CSP
         return response

@@ -401,10 +401,23 @@ legal mass with a signed distance in mDa, and a one-sentence narrative. Codes ab
 are never invented: past `table_max_mz` the tables answer possible for every mass, so nothing is
 reported impossible there.
 
-**Summary first, payload on request.** A 5000-peak spectrum's clean list is hundreds of KB and agent
-harnesses truncate large tool results, so the default answer is the summary plus the removals; the
-clean peak list comes back only with `include_kept=true`, and the summary says how many peaks that
-would add.
+**Summary first, payload on request, sized to be read.** A 5000-peak spectrum's clean list is
+hundreds of KB and agent harnesses truncate large tool results in silence, so the default answer is
+the summary plus the removals; the clean peak list comes back only with `include_kept=true`. Capping
+how many removals are listed (`max_result_peaks`) is not enough on its own — those 250 entries cost
+about 116 KB once each carries its narrative — so an answer is also measured against
+`max_answer_bytes` (20 KB) and fitted to it: the narratives on the tail of the removal list go first,
+then the opted-in peak list, then whole entries. Whatever was given up is written into the answer
+(`removed_truncated`, `kept_truncated`, `kept_omitted`, and `answer_oversized` when even the summary
+cannot fit). `summary` always describes the whole spectrum, and `clean_batch` applies the same budget
+to the whole batch reply rather than to each spectrum.
+
+**Guide.** https://denoise.metabolomics.us/mcp explains this for people and agents — client
+configuration, the four tools, what an answer looks like, the reason codes, the limits, and how to
+call it with `curl`. It is served from this repository
+(`denoise_service/static/mcp.html`), and
+`denoise_service/tests/test_static_mcp_page.py` fails the release if the page drifts from the reason
+codes the filter emits, the limits `Limits()` enforces, or a real answer the tool produces.
 
 **It streams.** With `stream=true` (default in `clean_batch`) the server calls MCP
 `report_progress` as it goes — `KEPT 181.0707 100.0`,
