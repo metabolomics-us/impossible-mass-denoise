@@ -190,11 +190,27 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:8301/mcp \
     # 400. All three are asserted in denoise_mcp/tests/test_http_hosting.py.
 ```
 
-The unit runs `/health`, not `/`. A monitoring probe that asked `/` got 404 and looked like a dead
-service, because the host header guards run before routing -- so `/` is a 404 even on a healthy
-process, and `/mcp` is a 406 there. `/health` answers 200 with the fingerprint the tables were loaded
-with, which is what a monitor should watch and what `ops/deploy/smoke.json` checks. The same is true
-of the REST service; the endpoints differ (`/health` there reports the same fields), and
+There is no health route on this process, and a monitor pointed at one looks like an outage. `GET /`
+and `GET /health` are both 404: the host header guards run before routing and `denoise_mcp/`
+registers only the MCP path. Verified against the live process (`GET /health` answered
+`HTTP/1.1 404 Not Found` from uvicorn) and asserted in
+`denoise_mcp/tests/test_http_hosting.py::test_there_is_no_health_route_on_the_endpoint`. A bounded
+probe is a POST that answers in hundredths of a second and, with `service_info`, carries the
+fingerprint:
+
+```bash
+curl -sS --max-time 10 -X POST https://denoise.mcp.metabolomics.us/mcp \
+    -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+    --data '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | head -c 120
+    # 200, about 0.02 s through nginx, four tool names. Send
+    # {"method":"tools/call","params":{"name":"service_info","arguments":{}}}
+    # instead to get the table fingerprint and every limit, which is what smoke.json's `mcp` checks.
+```
+
+Never probe with `GET /mcp`: an `Accept` that offers `text/event-stream` (and `*/*` does) opens the
+notification stream and stays open, so a check built on it reports a timeout on a healthy service.
+The REST service is the surface that has a health endpoint -- `GET /healthz`, in
+`denoise_service/app.py` -- and `/health` is 404 there too; sections 3 and 4 use `/healthz`.
 `--stateless` on this unit means a restart costs a client only a new `initialize`, which is also why
 there is no session store to lose.
 

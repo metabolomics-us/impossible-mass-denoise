@@ -142,6 +142,30 @@ def test_the_vhost_declares_nothing_the_estate_already_sets_at_http_level():
         "the file must name the mirror, in this repo or in the nginx role")
 
 
+def test_the_deploy_docs_point_monitors_at_a_request_that_exists():
+    """A health path is the easiest thing in a deploy document to invent: it reads plausibly, and
+    the person who writes it rarely has a process in front of them. This document asserted that the
+    MCP host answered `/health` with the table fingerprint. It does not -- `GET /health` is a uvicorn
+    404 on the live process, because the host header guards run before routing and only the MCP path
+    is registered -- and it called the REST endpoint `/health` when `denoise_service/app.py` defines
+    `@app.get("/healthz")`. Both are asserted against the source now, so the sentence cannot come
+    back without the route coming back with it.
+    """
+    readme = read("ops/deploy/README.md")
+    app = read("denoise_service/app.py")
+    assert '@app.get("/healthz")' in app, \
+        "the REST health endpoint moved; the deploy README still names it"
+    assert "/healthz" in readme, "the README must name the REST endpoint that exists"
+    assert "There is no health route on this process" in readme, (
+        "the MCP section has to say plainly that there is no health route: a monitor author assumes "
+        "/health, and a 404 from a healthy process reads as an outage")
+    assert "`/health` answers 200" not in readme, (
+        "this sentence was written from assumption rather than measurement; the live process 404s")
+    vhost = read("ops/deploy/nginx-denoise-mcp.conf")
+    assert "bounded POST" in vhost, (
+        "the vhost header must point at the request that actually proves readiness")
+
+
 def test_systemd_unit_runs_the_mcp_server_as_the_service_user():
     text = read("ops/deploy/denoise-mcp.service")
     start = re.search(r"^ExecStart=(.+)$", text, flags=re.M).group(1)
