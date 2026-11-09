@@ -152,8 +152,12 @@ progress notifications arrive bundled at the end and long cleans 504.
 The vhost serves `/mcp` and nothing else: every other path gets a 404 that names
 https://denoise.metabolomics.us/mcp, where the guide people and agents read lives (on the REST host,
 see section 1). A browser opened on the endpoint address therefore lands on instructions instead of a
-protocol error. Keep this repository's copy of the vhost and the nginx role's copy identical — that
-role owns `conf.d` and rewrites the file. One trap learned the hard way: `conf.d` files are included
+protocol error. Keep this repository's copy (`ops/deploy/nginx-denoise-mcp.conf`) byte-for-byte identical to
+the role's copy (`ansible/roles/nginx/files/conf.d/denoise-mcp.conf` in
+`metabolomics-us/fiehnlab-slurm-cluster`) — that role owns `conf.d`, ships it with
+`nginx_conf_d_purge: true`, and rewrites the file. The role also runs
+`scripts/test-nginx-conf-d.sh`, which re-states the one http-context rule nginx would
+otherwise enforce at load time on the whole host. One trap learned the hard way: `conf.d` files are included
 into a single http context, and nginx refuses the same directive twice in one context. This file once
 carried `limit_req_status 429;` at http level, which the estate's `flasheic-mcp.conf` already sets
 there; `nginx -t` failed with "limit_req_status directive is duplicate" and the whole reverse proxy

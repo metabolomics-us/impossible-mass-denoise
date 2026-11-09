@@ -133,6 +133,13 @@ def test_the_vhost_declares_nothing_the_estate_already_sets_at_http_level():
         "zone names are global in the http context: %s" % sorted(zones))
     assert "include conf.d/tls-common.inc;" in code, (
         "TLS settings come from the shared include, not from a copy of them here")
+    # The copy in this repository IS the deployed file: the nginx role mirrors it byte for byte into
+    # ansible/roles/nginx/files/conf.d/denoise-mcp.conf. Say where it lands and what the mirror is,
+    # or the next editor treats this as a sketch and the two drift.
+    assert "# /etc/nginx/conf.d/denoise-mcp.conf   on kvm-node-12" in text, (
+        "the file must name the path it is deployed to, the way every other conf.d file does")
+    assert "fiehnlab-slurm-cluster" in text or "impossible-mass-denoise" in text, (
+        "the file must name the mirror, in this repo or in the nginx role")
 
 
 def test_systemd_unit_runs_the_mcp_server_as_the_service_user():
