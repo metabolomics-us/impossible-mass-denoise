@@ -320,3 +320,33 @@ def test_a_get_on_the_endpoint_opens_the_stream_and_does_not_end(stateless_serve
             raise AssertionError("the stream ended after two reads; a notification stream stays open")
         except (TimeoutError, socket.timeout):
             pass                          # still open after the first byte or after a frame: correct
+
+
+# ---------------------------------------------------------------- there is no health endpoint
+def test_there_is_no_health_route_on_the_endpoint(stateless_server):
+    """`GET /health` is a 404 here, and it is worth asserting because the opposite is what a
+    monitor author assumes. The host header guards run before routing and this ASGI app registers
+    only the MCP path, so every non-endpoint path -- `/`, `/health`, `/healthz` -- is a uvicorn 404
+    even when the process is perfectly healthy and holding the right tables. Live proof, the same
+    request over TLS through nginx:
+
+        $ curl -sS -o /dev/null -w '%{http_code}\\n' -H 'Accept: */*' \\
+              https://denoise.mcp.metabolomics.us/health
+        404
+
+    What a monitor should send instead is a bounded POST, which is also what `ops/deploy/smoke.json`
+    sends; `tools/list` answers in hundredths of a second, and `service_info` carries the table
+    fingerprint with the limits. A GET on the endpoint itself is the one request that must never be
+    a health check -- see test_a_get_on_the_endpoint_opens_the_stream_and_does_not_end.
+    """
+    for path in ("/health", "/healthz", "/healthcheck", "/status"):
+        with socket.create_connection(("127.0.0.1", stateless_server.port), timeout=5) as sock:
+            sock.sendall(b"GET %s HTTP/1.1\r\nHost: %s\r\nAccept: */*\r\nConnection: close\r\n\r\n"
+                         % (path.encode(), PUBLIC_HOST.encode()))
+            head = b""
+            while b"\r\n\r\n" not in head:
+                chunk = sock.recv(4096)
+                assert chunk, "no response at all for %s: %r" % (path, head)
+                head += chunk
+            status = head.split(b"\r\n", 1)[0].decode()
+            assert status.startswith("HTTP/1.1 404"), (path, status)
