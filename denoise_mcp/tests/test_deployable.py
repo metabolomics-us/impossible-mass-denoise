@@ -209,20 +209,36 @@ def test_readme_documents_the_hosted_surface():
 
 
 def test_the_mcp_smoke_expectation_matches_the_code_in_this_commit():
+    """The chemistry layer of the smoke contract: the numbers in `smoke.json` have to be the numbers
+    this commit's pure functions produce, so a deploy built from a different commit is caught before
+    anyone points a client at it.
+
+    The keys are the wire keys (`expect.summary`, `expect.removed`), because that is what
+    `smoke.json` now carries -- see `denoise_mcp/tests/test_deploy_contract.py`, which walks the same
+    expectation against a real `--stateless` server over a socket. The library's summary dict agrees
+    with the wire's `summary` object field for field, and that agreement is part of what this
+    assertion protects: if the two ever disagree, this fails while the integration test passes.
+    """
     smoke = json.loads(read("ops/deploy/smoke.json"))
     assert "mcp" in smoke, "ops/deploy/smoke.json needs an mcp block for the MCP deploy"
     mcp = smoke["mcp"]
+    expect = mcp["expect"]
     peaks = [(float(m), float(i)) for m, i in mcp["request"]["peaks"]]
     res = clean.clean_spectrum(peaks, mcp["request"]["mode"])
-    assert clean.summary(res)["kept"] == mcp["expect"]["kept"]
-    assert clean.summary(res)["removed"] == mcp["expect"]["removed"]
-    assert [r.mz for r in res.removed] == mcp["expect"]["removed_mz"]
-    assert [p["mz"] for p in mcp["expect"]["peaks"]] == mcp["expect"]["removed_mz"]
-    for expected, actual in zip(mcp["expect"]["peaks"], res.removed):
-        assert set(expected["reasons"]) <= set(actual.reasons), (expected, actual.reasons)
+    summary = clean.summary(res)
+    for key, want in expect["summary"].items():
+        assert summary[key] == want, (key, summary[key], want)
+    assert summary["fingerprint"] == smoke["fingerprint"], (
+        "the smoke request's own answer must carry the fingerprint the file records")
+    assert [r.mz for r in res.removed] == [p["mz"] for p in expect["removed"]]
+    for expected, actual in zip(expect["removed"], res.removed):
+        assert set(expected["reasons_subset"]) <= set(actual.reasons), (expected, actual.reasons)
         assert expected["nearest_legal_mz"] == pytest.approx(actual.nearest_legal_mz, abs=1e-9)
     # A smoke test that cannot fail proves nothing: both verdicts must occur.
-    assert mcp["expect"]["kept"] > 0 and mcp["expect"]["removed"] > 0
+    assert expect["both_verdicts_required"] is True
+    assert summary["kept"] > 0 and summary["removed"] > 0
+    assert [round(p.mz, 4) for p in res.kept] == expect["kept_with_include_kept"], (
+        "the file names the kept masses as they appear under include_kept=true")
 
 
 def test_the_reason_codebook_is_the_one_the_resource_serves():
