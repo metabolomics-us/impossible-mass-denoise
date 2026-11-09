@@ -19,39 +19,22 @@ no environment variables: the YAML config is the only configuration.
 
 ## 1. nginx vhost
 
-This block belongs in the `nginx` role of `metabolomics-us/fiehnlab-slurm-cluster`. That role owns
-whiteale's `conf.d` with purge enabled, so a hand-placed file will be deleted on the next run.
+This vhost already exists and is managed: `ansible/roles/nginx/files/conf.d/denoise.conf` in
+`metabolomics-us/fiehnlab-slurm-cluster`. It declares `upstream denoise_backend` with the two service
+nodes on the private 192.168.5.0/24 fabric (`192.168.5.26:8300`, `192.168.5.27:8300`,
+`hash $remote_addr consistent`, `max_fails=2`), an `:80` server that answers the ACME challenge and
+301s everything else, and a 443 server with `client_max_body_size 2m`, `proxy_read_timeout 60s`,
+keepalive, and `proxy_set_header X-Forwarded-For $remote_addr`.
 
-```nginx
-server {
-    listen 443 ssl;
-    server_name denoise.metabolomics.us;
+That last line is the one to defend in review. The service trusts the FIRST `X-Forwarded-For` entry
+as its rate-limit key (`trusted_proxy: true`), so the proxy must overwrite the header, never append:
+`$proxy_add_x_forwarded_for` would keep a client-supplied value in front and let any client choose
+its own key. And `$remote_addr` has to be the real client: after any change, make a request from a
+known machine and check nginx's access log shows that machine, not a router. If NAT hides client
+addresses, every request shares one rate-limit key and the limiter degenerates into one shared bucket.
 
-    # TLS lines (ssl_certificate, ssl_certificate_key, protocols) are the operator's to fill from
-    # the house tls-common pattern. An :80 server for the ACME challenge plus the https redirect
-    # belongs in the same role.
-
-    # Larger than the service's own 1 MiB cap on purpose: the service, not nginx, answers an
-    # oversized body with 413, and only the service's reply carries the CORS headers.
-    client_max_body_size 2m;
-
-    location / {
-        proxy_pass http://127.0.0.1:8300;
-        proxy_read_timeout 60s;
-        proxy_set_header Host $host;
-        # Overwrite, never append. The service trusts the FIRST X-Forwarded-For entry
-        # (trusted_proxy: true) as the rate-limit key; $proxy_add_x_forwarded_for would keep
-        # a client-supplied value in front and let any client choose its own key.
-        proxy_set_header X-Forwarded-For $remote_addr;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-```
-
-`$remote_addr` must be the real client address. After deploying, make a request from a known
-machine and check that nginx's access log shows that machine, not the router. If NAT hides client
-addresses, every request shares one rate-limit key and the limiter degenerates into a single
-shared bucket for everyone.
+The role owns whiteale's whole `conf.d` and ships it with purge enabled (`nginx_conf_d_purge: true`),
+so a hand-placed file there is deleted on the next run. Anything you want to keep belongs in the role.
 
 `location /` also publishes `/docs` and `/openapi.json`. That is intended: they are the public
 API documentation and expose nothing the API does not already offer.
@@ -62,9 +45,30 @@ not the MCP endpoint: that is a different name, `denoise.mcp.metabolomics.us`, b
 
 ## 2. DNS and TLS
 
-Operator-owned. Create the DNS record for `denoise.metabolomics.us` pointing at whiteale's public
-address, and issue a certificate for the name `denoise.metabolomics.us` (the same way the other
-metabolomics.us vhosts get theirs). Nothing in this repository holds the certificate.
+Operator-owned: nothing in this repository holds a key, a certificate, or the Route 53 credentials.
+Both names point at whiteale (`128.120.143.172`), and they are issued differently, because that is
+how the estate does each:
+
+- `denoise.metabolomics.us` is a **DNS-01** lineage: the `certbot` role lists it in
+  `certbot_dns_certs` and issues it with `--dns-route53`. Adding a name there needs the IAM user's
+  `_acme-challenge` permission widened first, or issuance fails on the TXT record.
+- `denoise.mcp.metabolomics.us` is a **HTTP-01 webroot** lineage, the same way
+  `mcp.metabolomics.us` and `masswiki.mcp.metabolomics.us` get theirs, because the vhost already
+  serves `/.well-known/acme-challenge/` from `/var/lib/letsencrypt`:
+
+  ```bash
+  sudo -u certbot /usr/local/sbin/certbot-apptainer certonly --webroot \
+      -w /var/lib/letsencrypt -d denoise.mcp.metabolomics.us \
+      --non-interactive --agree-tos -m berlinguyinca@gmail.com --key-type ecdsa
+  ```
+
+  It has to run as `certbot`, not root: the wrapper refuses uid 0. Renewal is the
+  `certbot-apptainer.timer`, and the deploy hook touches the stamp a root `.path` unit watches, so
+  nginx reloads itself after a renewal -- certbot never gets a way to run anything as root.
+
+Order matters at first install: nginx will not load a 443 server whose certificate files are missing,
+so `nginx -t` fails until the certificate exists. Put an `:80`-only copy of the vhost's first server
+block in `conf.d` (that is all the challenge needs), issue, then install the real file.
 
 ## 3. Install the unit and config on whiteale
 
@@ -149,12 +153,18 @@ The vhost serves `/mcp` and nothing else: every other path gets a 404 that names
 https://denoise.metabolomics.us/mcp, where the guide people and agents read lives (on the REST host,
 see section 1). A browser opened on the endpoint address therefore lands on instructions instead of a
 protocol error. Keep this repository's copy of the vhost and the nginx role's copy identical — that
-role owns `conf.d` and rewrites the file.
+role owns `conf.d` and rewrites the file. One trap learned the hard way: `conf.d` files are included
+into a single http context, and nginx refuses the same directive twice in one context. This file once
+carried `limit_req_status 429;` at http level, which the estate's `flasheic-mcp.conf` already sets
+there; `nginx -t` failed with "limit_req_status directive is duplicate" and the whole reverse proxy
+stopped reloading, not just this vhost. `denoise_mcp/tests/test_deployable.py` now forbids re-adding
+it.
 
 It gets its own venv, because the MCP SDK needs Python >= 3.10 while the REST service runs on the
 nodes' system Python 3.9:
 
 ```bash
+sudo dnf -y install python3.12 python3.12-pip          # appstream on Rocky 9; 3.9 is the system default
 sudo useradd --system --home-dir /opt/denoise-mcp --shell /usr/sbin/nologin denoise  # same user as the service
 sudo mkdir -p /opt/denoise-mcp
 sudo git clone https://github.com/metabolomics-us/impossible-mass-denoise.git /opt/denoise-mcp/app
@@ -166,8 +176,23 @@ sudo /opt/denoise-mcp/venv/bin/pip install -r /opt/denoise-mcp/app/requirements-
 sudo cp /opt/denoise-mcp/app/ops/deploy/denoise-mcp.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now denoise-mcp
 journalctl -u denoise-mcp -n 20            # expect: "tables loaded: ... fingerprint <fp> | ceiling 1700 Da"
-curl -s http://127.0.0.1:8301/mcp -o /dev/null -w '%{http_code}\n'    # 421 or 406: alive, refusing a bad Host
+curl -s http://127.0.0.1:8301/mcp -o /dev/null -w '%{http_code}\n'    # 421: alive, and refusing a Host that is not the allowlisted name
+curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:8301/mcp \
+    -H 'Host: denoise.mcp.metabolomics.us' -H 'Content-Type: application/json' \
+    -H 'Accept: application/json, text/event-stream' \
+    --data '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+    # 200, and the body names four tools. `Accept` must cover both media types (`*/*` also does);
+    # naming one of them, or sending no Accept at all, is 406, and a POST with no Content-Type is
+    # 400. All three are asserted in denoise_mcp/tests/test_http_hosting.py.
 ```
+
+The unit runs `/health`, not `/`. A monitoring probe that asked `/` got 404 and looked like a dead
+service, because the host header guards run before routing -- so `/` is a 404 even on a healthy
+process, and `/mcp` is a 406 there. `/health` answers 200 with the fingerprint the tables were loaded
+with, which is what a monitor should watch and what `ops/deploy/smoke.json` checks. The same is true
+of the REST service; the endpoints differ (`/health` there reports the same fields), and
+`--stateless` on this unit means a restart costs a client only a new `initialize`, which is also why
+there is no session store to lose.
 
 Every limit `service_info` reports is a flag on the server (`--max-peaks`, `--max-batch`,
 `--max-formula-ions`, `--max-model-ions`, `--max-result-peaks`, `--max-answer-bytes`), so tuning one

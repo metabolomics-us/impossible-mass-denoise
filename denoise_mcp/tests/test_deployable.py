@@ -111,6 +111,30 @@ def test_only_the_mcp_path_reaches_the_mcp_server_on_that_host():
         "the refusal has to point at the guide"
 
 
+def test_the_vhost_declares_nothing_the_estate_already_sets_at_http_level():
+    """conf.d files are included into ONE http context, and nginx rejects the same directive twice
+    in the same context. This was not hypothetical: the first version of this file carried
+    `limit_req_status 429;` at http level, which flasheic-mcp.conf already sets there, and
+    `nginx -t` failed with "limit_req_status directive is duplicate" -- taking every vhost on that
+    reverse proxy down at the next reload, not just this one.
+
+    So: directives that belong to the http context may be declared once, and the estate's other
+    conf.d files already own `limit_req_status`. Rate limiting still applies here because the zone
+    is namespaced and `limit_req` is used inside the location, which inherits the status.
+    """
+    text = read("ops/deploy/nginx-denoise-mcp.conf")
+    code = "\n".join(line.split("#")[0] for line in text.splitlines())
+    assert "limit_req_status" not in code, (
+        "another conf.d file sets this at http level; declaring it twice fails nginx -t for the "
+        "whole reverse proxy")
+    zones = set(re.findall(r"limit_req_zone[^;]*zone=([A-Za-z0-9_]+)", code))
+    assert zones, "the vhost must declare its own rate-limit zone"
+    assert all(z.startswith("denoise") for z in zones), (
+        "zone names are global in the http context: %s" % sorted(zones))
+    assert "include conf.d/tls-common.inc;" in code, (
+        "TLS settings come from the shared include, not from a copy of them here")
+
+
 def test_systemd_unit_runs_the_mcp_server_as_the_service_user():
     text = read("ops/deploy/denoise-mcp.service")
     start = re.search(r"^ExecStart=(.+)$", text, flags=re.M).group(1)

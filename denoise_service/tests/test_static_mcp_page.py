@@ -199,6 +199,40 @@ def test_the_example_answer_is_a_real_answer(client, page):
     assert payload["kept_omitted"] in shown
 
 
+def test_the_header_rules_the_page_states_are_the_ones_the_server_applies(client, page):
+    """The transport paragraph is a claim about the MCP server's behavior, and it was measured, not
+    remembered. A hosted server answers when `Accept` covers both media types (`*/*` included),
+    refuses with 406 when Accept names only one of them or is absent, and refuses a POST without
+    `Content-Type: application/json` with 400 -- asserted in
+    denoise_mcp/tests/test_http_hosting.py against a real process.
+
+    This test asserts the page tells clients the same three rules, so the guide cannot drift from
+    the endpoint. Change one side, change the other.
+    """
+    html_text = page
+    # The paragraph under "By hand, without a client", and the list in its "Trouble" disclosure.
+    paragraph = re.search(r"<h2>By hand, without a client</h2>\s*<p>(.*?)</p>", html_text, re.S)
+    assert paragraph, "the by-hand section lost its paragraph"
+    para = paragraph.group(1)
+
+    assert "Content-Type" in para and "400" in para, para
+    assert "406" in para and "cover both" in para and "*/*" in para, (
+        "the page must state that Accept has to cover both types and that */* does", para)
+
+    trouble = re.search(r"<summary>Trouble</summary>\s*<ul>(.*?)</ul>", html_text, re.S)
+    assert trouble, "the trouble list is gone"
+    codes = re.findall(r"<strong>(\d{3})</strong>", trouble.group(1))
+    assert {"400", "406", "421"} <= set(codes), codes
+    assert "Content-Type" in trouble.group(1), "400 must name the header that caused it"
+    assert "no <code>Accept</code>" in trouble.group(1), (
+        "the page must say that sending no Accept at all is also refused", trouble.group(1))
+    assert "notification stream" in trouble.group(1), (
+        "a GET whose Accept offers text/event-stream opens the notification stream and stays open "
+        "(proved by test_a_get_on_the_endpoint_opens_the_stream_and_does_not_end, and seen on the "
+        "live endpoint); the page has to say so, or the first person to GET /mcp reads a working "
+        "stream as a hang", trouble.group(1))
+
+
 def test_the_page_states_the_caveat_the_rest_of_the_site_states(client, page):
     caveat = ("Impossible means not explained by CHNOPS, singly charged, monoisotopic.")
     assert caveat in page
